@@ -567,3 +567,34 @@ label.check {
   background: var(--error);
   color: #fff;
 }
+
+/* Player character */
+.character-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.3rem;
+}
+
+.icon-choice {
+  display: grid;
+  place-items: center;
+  padding: 0.25rem;
+  background: transparent;
+  border-color: var(--border);
+}
+
+.icon-choice.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.participants .token-icon {
+  border-width: 1px;
+}

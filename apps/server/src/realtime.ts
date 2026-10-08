@@ -1,5 +1,9 @@
 import {
   can,
+  characterIconSchema,
+  characterPlaceSchema,
+  defaultCharacterIcon,
+  BUILTIN_ICON_PREFIX,
   gridUpdateSchema,
   joinRequestSchema,
   mapRefSchema,
@@ -13,6 +17,7 @@ import {
 import type {
   ActionResult,
   Actor,
+  CharacterIconResult,
   ClientToServerEvents,
   GridUpdateResult,
   JoinRequest,
@@ -28,9 +33,10 @@ import type {
 import type { Participant } from '@prisma/client';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Server, Socket } from 'socket.io';
+import type { CharacterService } from './characters/service';
 import type { MapService } from './maps/service';
 import type { SessionService } from './sessions/service';
-import { patchFor } from './tokens/patch';
+import { patchFor, type TokenChange } from './tokens/patch';
 import type { TokenOutcome, TokenService } from './tokens/service';
 
 /**
@@ -48,6 +54,7 @@ interface RealtimeDeps {
   sessions: SessionService;
   maps: MapService;
   tokens: TokenService;
+  characters: CharacterService;
   log: FastifyBaseLogger;
 }
 
@@ -56,13 +63,15 @@ const roleRoom = (sessionId: string, role: Role) => `${sessionId}:${role}`;
 export interface Realtime {
   /** Sends the complete current state of a session to everyone who has joined it. */
   broadcastState(sessionId: string): Promise<void>;
+  /** Tells everyone that a character changed its icon (and, if it is on the map, how it looks now). */
+  announceCharacter(sessionId: string, change: TokenChange | null): Promise<void>;
   /** Resolves once every in-flight event handler has finished (used on shutdown, before closing the DB). */
   drain(): Promise<void>;
 }
 
 export function registerRealtime(
   io: IoServer,
-  { sessions, maps, tokens, log }: RealtimeDeps,
+  { sessions, maps, tokens, characters, log }: RealtimeDeps,
 ): Realtime {
   const inFlight = new Set<Promise<void>>();
   const track = (work: Promise<void>): void => {
@@ -155,11 +164,54 @@ export function registerRealtime(
   });
 
   /** Sends every role the patch it may see, to everyone in the session except the sender. */
-  const emitTokenChange = (socket: IoSocket, sessionId: string, outcome: TokenOutcome) => {
-    if (!outcome.ok) return;
+  const emitPatches = (from: IoSocket | IoServer, sessionId: string, change: TokenChange) => {
     for (const role of ['master', 'player'] as const) {
-      socket.to(roleRoom(sessionId, role)).emit('tokens.changed', patchFor(outcome.change, role));
+      from.to(roleRoom(sessionId, role)).emit('tokens.changed', patchFor(change, role));
     }
+  };
+
+  const emitTokenChange = (socket: IoSocket, sessionId: string, outcome: TokenOutcome) => {
+    if (outcome.ok) emitPatches(socket, sessionId, outcome.change);
+  };
+
+  const announceCharacter = async (sessionId: string, change: TokenChange | null) => {
+    if (change) emitPatches(io, sessionId, change);
+    await broadcastParticipants(sessionId);
+  };
+
+  const placeCharacter = async (socket: IoSocket, request: unknown): Promise<TokenResult> => {
+    const joined = socket.data.session;
+    if (!joined) return { ok: false, error: 'not_joined' };
+    const mine = { type: 'player_character', ownerParticipantId: joined.participantId } as const;
+    if (!can(actorOf(joined), 'token.create', mine)) return { ok: false, error: 'forbidden' };
+    const parsed = characterPlaceSchema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'invalid_request' };
+
+    const outcome = await tokens.placeCharacter(
+      joined.sessionId,
+      joined.participantId,
+      parsed.data,
+    );
+    return tokenResult(socket, joined.sessionId, outcome);
+  };
+
+  const setCharacterIcon = async (
+    socket: IoSocket,
+    request: unknown,
+  ): Promise<CharacterIconResult> => {
+    const joined = socket.data.session;
+    if (!joined) return { ok: false, error: 'not_joined' };
+    if (!can(actorOf(joined), 'character.setIcon')) return { ok: false, error: 'forbidden' };
+    const parsed = characterIconSchema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'invalid_request' };
+
+    const result = await characters.setIcon(
+      joined.sessionId,
+      joined.participantId,
+      BUILTIN_ICON_PREFIX + parsed.data.icon,
+    );
+    await announceCharacter(joined.sessionId, result.change);
+    return { ok: true, icon: result.icon };
   };
 
   const tokenResult = (socket: IoSocket, sessionId: string, outcome: TokenOutcome): TokenResult => {
@@ -362,6 +414,18 @@ export function registerRealtime(
         error: 'internal',
       } as const),
     );
+    socket.on('character.setIcon', (request, ack) =>
+      acked('character.setIcon', ack, () => setCharacterIcon(socket, request), {
+        ok: false,
+        error: 'internal',
+      } as const),
+    );
+    socket.on('character.place', (request, ack) =>
+      acked('character.place', ack, () => placeCharacter(socket, request), {
+        ok: false,
+        error: 'internal',
+      } as const),
+    );
     socket.on('token.drag', (request) =>
       track(relayDrag(socket, request).catch((err) => log.error(err, 'token.drag failed'))),
     );
@@ -381,6 +445,7 @@ export function registerRealtime(
 
   return {
     broadcastState,
+    announceCharacter,
     async drain() {
       while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
     },
@@ -388,5 +453,11 @@ export function registerRealtime(
 }
 
 function toView(p: Participant, online: boolean): ParticipantView {
-  return { id: p.id, displayName: p.displayName, role: p.role, online };
+  return {
+    id: p.id,
+    displayName: p.displayName,
+    role: p.role,
+    online,
+    icon: p.iconUrl ?? defaultCharacterIcon(p.id),
+  };
 }

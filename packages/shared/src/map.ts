@@ -83,6 +83,7 @@ export type ActionError =
   | 'map_not_found'
   | 'token_not_found'
   | 'too_many_tokens'
+  | 'already_placed'
   | 'internal';
 export type ActionResult<T extends object = object> =
   ({ ok: true } & T) | { ok: false; error: ActionError };

@@ -4,9 +4,11 @@ import { Link, useParams } from 'react-router';
 import { MapCanvas } from '../components/MapCanvas';
 import { MapControls } from '../components/MapControls';
 import { ParticipantList } from '../components/ParticipantList';
+import { CharacterPanel } from '../components/CharacterPanel';
 import { MonsterPalette, TokenList } from '../components/TokenPanels';
 import {
   useSession,
+  type CharacterActions,
   type MapActions,
   type PlacementSpec,
   type RemoteDrags,
@@ -26,7 +28,8 @@ const errorText: Record<JoinError | 'network', string> = {
 
 export function SessionPage() {
   const { inviteCode = '' } = useParams();
-  const { state, joinAsPlayer, mapActions, tokenActions, remoteDrags } = useSession(inviteCode);
+  const { state, joinAsPlayer, mapActions, tokenActions, characterActions, remoteDrags } =
+    useSession(inviteCode);
 
   switch (state.status) {
     case 'loading':
@@ -66,6 +69,7 @@ export function SessionPage() {
           state={state}
           actions={mapActions}
           tokenActions={tokenActions}
+          characterActions={characterActions}
           remoteDrags={remoteDrags}
         />
       );
@@ -77,28 +81,36 @@ type Joined = Extract<SessionState, { status: 'joined' }>;
 const placeErrors: Record<string, string> = {
   too_many_tokens: 'На карте уже максимум фишек. Удалите ненужные.',
   map_not_found: 'Сначала загрузите карту.',
-  forbidden: 'Фишки может ставить только Мастер.',
+  forbidden: 'Фишки мобов может ставить только Мастер.',
+  already_placed: 'Ваш персонаж уже стоит на этой карте.',
 };
 
 function JoinedView({
   state,
   actions,
   tokenActions,
+  characterActions,
   remoteDrags,
 }: {
   state: Joined;
   actions: MapActions;
   tokenActions: TokenActions;
+  characterActions: CharacterActions;
   remoteDrags: RemoteDrags;
 }) {
   const [calibrating, setCalibrating] = useState(false);
-  const [placing, setPlacing] = useState<PlacementSpec | null>(null);
+  const [placing, setPlacing] = useState<PlacementSpec | 'character' | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ x: number; y: number; nonce: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const { world, self } = state;
   const isMaster = self.role === 'master';
   const currentMap = world.maps.find((m) => m.id === world.currentMapId) ?? null;
+  // The participant list is kept fresh by the server (icons change), `self` is the join-time snapshot.
+  const me = state.participants.find((p) => p.id === self.id) ?? self;
+  const myCharacter =
+    world.tokens.find((t) => t.type === 'player_character' && t.ownerParticipantId === self.id) ??
+    null;
   // A selection of a token that is gone (deleted, hidden, other map) simply stops applying.
   const selected = world.tokens.find((t) => t.id === selectedId) ?? null;
 
@@ -111,10 +123,24 @@ function JoinedView({
     [self.id, self.role],
   );
 
+  const canDelete = useCallback(
+    (t: TokenView) =>
+      can({ participantId: self.id, role: self.role }, 'token.delete', {
+        type: t.type,
+        ownerParticipantId: t.ownerParticipantId,
+      }),
+    [self.id, self.role],
+  );
+
   const place = useCallback(
-    async (spec: PlacementSpec, x: number, y: number) => {
-      const res = await tokenActions.create(spec, x, y);
+    async (spec: PlacementSpec | 'character', x: number, y: number) => {
+      const res =
+        spec === 'character'
+          ? await tokenActions.placeCharacter(x, y)
+          : await tokenActions.create(spec, x, y);
       if (!res.ok) setNotice(placeErrors[res.error] ?? 'Не удалось поставить фишку.');
+      // A character is placed once; monsters can be placed repeatedly while the mode stays on.
+      else if (spec === 'character') setPlacing(null);
     },
     [tokenActions],
   );
@@ -134,14 +160,19 @@ function JoinedView({
         setPlacing(null);
         setCalibrating(false);
         setSelectedId(null);
-      } else if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && isMaster && selected) {
+      } else if (
+        (e.key === 'Delete' || e.key === 'Backspace') &&
+        !typing &&
+        selected &&
+        canDelete(selected)
+      ) {
         e.preventDefault();
         tokenActions.remove(selected.id);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isMaster, selected, tokenActions]);
+  }, [canDelete, selected, tokenActions]);
 
   return (
     <div className="session">
@@ -172,7 +203,7 @@ function JoinedView({
                 onDrag: tokenActions.drag,
                 onMove: tokenActions.move,
               }}
-              placing={isMaster && !calibrating ? placing : null}
+              placing={calibrating ? null : placing}
               onPlace={(spec, x, y) => void place(spec, x, y)}
               focus={focus}
             />
@@ -205,9 +236,23 @@ function JoinedView({
               }}
             />
           )}
+          {!isMaster && (
+            <CharacterPanel
+              me={me}
+              token={myCharacter}
+              hasMap={!!currentMap}
+              placing={placing === 'character'}
+              onPlacingChange={(value) => setPlacing(value ? 'character' : null)}
+              characterActions={characterActions}
+              tokenActions={tokenActions}
+            />
+          )}
           {isMaster && currentMap && (
             <>
-              <MonsterPalette placing={placing} onPlacingChange={setPlacing} />
+              <MonsterPalette
+                placing={placing === 'character' ? null : placing}
+                onPlacingChange={setPlacing}
+              />
               <TokenList
                 tokens={world.tokens}
                 grid={currentMap.grid}

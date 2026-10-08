@@ -8,7 +8,8 @@ export type Action =
   | 'token.create'
   | 'token.move'
   | 'token.delete'
-  | 'token.setVisibility';
+  | 'token.setVisibility'
+  | 'character.setIcon';
 
 export interface Actor {
   participantId: string;
@@ -30,6 +31,9 @@ export function can(actor: Actor, action: Action, token?: TokenSubject): boolean
     case 'map.set':
     case 'grid.update':
       return actor.role === 'master';
+
+    case 'character.setIcon':
+      return actor.role === 'player';
 
     case 'token.setVisibility':
       return actor.role === 'master' && token?.type === 'monster';

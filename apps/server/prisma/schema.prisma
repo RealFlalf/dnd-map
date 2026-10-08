@@ -43,6 +43,8 @@ model Participant {
   displayName String
   /// Hash of the secret key kept in the browser; lets the participant reclaim their identity.
   keyHash     String
+  /// Character icon chosen by a player: `builtin:<id>` or an uploaded file URL; null until chosen.
+  iconUrl     String?
   createdAt   DateTime @default(now())
   lastSeenAt  DateTime @default(now())
 

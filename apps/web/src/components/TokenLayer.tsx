@@ -1,9 +1,10 @@
 import type { GridSettings, TokenView } from '@dnd-map/shared';
 import Konva from 'konva';
 import { useEffect, useRef } from 'react';
-import { Circle, Group, Layer, Text } from 'react-konva';
+import { Circle, Group, Image as KonvaImage, Layer, Text } from 'react-konva';
 import type { RemoteDrags } from '../session/useSession';
-import { EMOJI_FONT, iconStyle } from './TokenIcon';
+import { EMOJI_FONT, iconFace } from './TokenIcon';
+import { useLoadedImage } from './useLoadedImage';
 
 const MOVE_TWEEN_SECONDS = 0.08;
 const TOKEN_FILL_RATIO = 0.9; // a token covers 90% of its cells so neighbours stay distinguishable
@@ -52,6 +53,9 @@ function TokenNode({
   const start = useRef({ x: token.x, y: token.y });
   const target = remote ?? token;
 
+  const face = iconFace(token.icon);
+  const picture = useLoadedImage(face.kind === 'image' ? face.url : null);
+
   useEffect(() => {
     const node = group.current;
     if (!node || node.isDragging()) return;
@@ -69,7 +73,6 @@ function TokenNode({
   useEffect(() => () => tween.current?.destroy(), []);
 
   const radius = (token.size * grid.scale * TOKEN_FILL_RATIO) / 2;
-  const { color, glyph } = iconStyle(token.icon);
   const selected = token.id === selectedId;
 
   return (
@@ -96,7 +99,7 @@ function TokenNode({
       )}
       <Circle
         radius={radius}
-        fill={color}
+        fill={face.kind === 'emoji' ? face.color : '#6b665e'}
         stroke={token.visible ? '#ffffff' : '#e8e0d0'}
         strokeWidth={2}
         strokeScaleEnabled={false}
@@ -105,18 +108,36 @@ function TokenNode({
         shadowBlur={6}
         shadowOpacity={0.45}
       />
-      <Text
-        x={-radius}
-        y={-radius}
-        width={radius * 2}
-        height={radius * 2}
-        align="center"
-        verticalAlign="middle"
-        text={glyph}
-        fontSize={radius * 1.15}
-        fontFamily={EMOJI_FONT}
-        listening={false}
-      />
+      {face.kind === 'emoji' && (
+        <Text
+          x={-radius}
+          y={-radius}
+          width={radius * 2}
+          height={radius * 2}
+          align="center"
+          verticalAlign="middle"
+          text={face.glyph}
+          fontSize={radius * 1.15}
+          fontFamily={EMOJI_FONT}
+          listening={false}
+        />
+      )}
+      {picture?.image && (
+        <Group
+          listening={false}
+          clipFunc={(ctx) => {
+            ctx.arc(0, 0, radius, 0, Math.PI * 2, false);
+          }}
+        >
+          <KonvaImage
+            image={picture.image}
+            x={-radius}
+            y={-radius}
+            width={radius * 2}
+            height={radius * 2}
+          />
+        </Group>
+      )}
     </Group>
   );
 }

@@ -1,4 +1,5 @@
 import type { ParticipantView } from '@dnd-map/shared';
+import { TokenIcon } from './TokenIcon';
 
 export function ParticipantList({
   participants,
@@ -24,6 +25,7 @@ export function ParticipantList({
               className={p.online ? 'dot on' : 'dot'}
               aria-label={p.online ? 'онлайн' : 'офлайн'}
             />
+            {p.role === 'player' && <TokenIcon icon={p.icon} size={22} />}
             <span className="name">
               {p.displayName}
               {p.id === selfId && ' (вы)'}

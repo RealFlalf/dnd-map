@@ -141,23 +141,30 @@ export function TokenList({
                     {col}, {row}
                   </span>
                 </button>
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label={token.visible ? `Скрыть: ${token.name}` : `Показать: ${token.name}`}
-                  title={token.visible ? 'Скрыть от игроков' : 'Показать игрокам'}
-                  onClick={() => actions.setVisible(token.id, !token.visible)}
-                >
-                  {token.visible ? '👁' : '🚫'}
-                </button>
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label={`Удалить: ${token.name}`}
-                  onClick={() => actions.remove(token.id)}
-                >
-                  ×
-                </button>
+                {/* Characters belong to their players: the master can neither hide nor remove them. */}
+                {token.type === 'monster' && (
+                  <>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={
+                        token.visible ? `Скрыть: ${token.name}` : `Показать: ${token.name}`
+                      }
+                      title={token.visible ? 'Скрыть от игроков' : 'Показать игрокам'}
+                      onClick={() => actions.setVisible(token.id, !token.visible)}
+                    >
+                      {token.visible ? '👁' : '🚫'}
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={`Удалить: ${token.name}`}
+                      onClick={() => actions.remove(token.id)}
+                    >
+                      ×
+                    </button>
+                  </>
+                )}
               </li>
             );
           })}

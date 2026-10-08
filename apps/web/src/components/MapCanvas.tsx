@@ -39,9 +39,9 @@ export interface TokensProps {
 interface Props {
   map: MapView;
   tokens: TokensProps;
-  /** While set, a click on the map places a token instead of selecting. */
-  placing: PlacementSpec | null;
-  onPlace(spec: PlacementSpec, x: number, y: number): void;
+  /** While set, a click on the map places a token instead of selecting: a monster, or the player's own character. */
+  placing: PlacementSpec | 'character' | null;
+  onPlace(spec: PlacementSpec | 'character', x: number, y: number): void;
   /** Centre the view on this point; a new object (new `nonce`) is a new request. */
   focus: { x: number; y: number; nonce: number } | null;
   /** While true, dragging draws a rectangle instead of panning; the rectangle becomes one grid cell. */
@@ -354,7 +354,11 @@ export function MapCanvas({
       )}
 
       {placing && (
-        <div className="map-hint">Нажмите на карту, чтобы поставить фишку · Esc — закончить</div>
+        <div className="map-hint">
+          {placing === 'character'
+            ? 'Нажмите на карту, чтобы поставить своего персонажа · Esc — отмена'
+            : 'Нажмите на карту, чтобы поставить фишку · Esc — закончить'}
+        </div>
       )}
 
       <div className="zoom-controls">

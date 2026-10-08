@@ -1,4 +1,4 @@
-import { MAX_IMAGE_SIDE } from '@dnd-map/shared';
+import { ICON_SIZE, MAX_IMAGE_SIDE } from '@dnd-map/shared';
 import sharp, { type Metadata } from 'sharp';
 
 export const PREVIEW_MAX_SIDE = 2048;
@@ -22,14 +22,14 @@ export interface ProcessedImage {
   preview: Buffer;
 }
 
+// Caps the number of pixels sharp is willing to decode (protects against decompression bombs).
+const limitInputPixels = MAX_IMAGE_SIDE * MAX_IMAGE_SIDE;
+
 /**
  * Decides what an upload really is by looking at its bytes, not at the declared type or
  * file name, and rejects anything that is not a reasonably sized JPEG, PNG or WebP.
  */
-export async function processImage(input: Buffer): Promise<ProcessedImage> {
-  // Caps the number of pixels sharp is willing to decode (protects against decompression bombs).
-  const limitInputPixels = MAX_IMAGE_SIDE * MAX_IMAGE_SIDE;
-
+async function inspect(input: Buffer): Promise<Pick<ProcessedImage, 'ext' | 'width' | 'height'>> {
   let meta: Metadata;
   try {
     meta = await sharp(input, { limitInputPixels }).metadata();
@@ -47,6 +47,11 @@ export async function processImage(input: Buffer): Promise<ProcessedImage> {
   const width = rotated ? meta.height : meta.width;
   const height = rotated ? meta.width : meta.height;
   if (width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE) throw new ImageError('image_too_large');
+  return { ext, width, height };
+}
+
+export async function processImage(input: Buffer): Promise<ProcessedImage> {
+  const { ext, width, height } = await inspect(input);
 
   let preview: Buffer;
   try {
@@ -66,4 +71,21 @@ export async function processImage(input: Buffer): Promise<ProcessedImage> {
   }
 
   return { ext, width, height, preview };
+}
+
+/**
+ * Turns an uploaded picture into a character icon: centre-cropped to a square, scaled to
+ * ICON_SIZE and re-encoded as WebP (this also drops any metadata). It is shown as a circle by the client.
+ */
+export async function processIcon(input: Buffer): Promise<Buffer> {
+  await inspect(input);
+  try {
+    return await sharp(input, { limitInputPixels })
+      .rotate()
+      .resize(ICON_SIZE, ICON_SIZE, { fit: 'cover', position: 'centre' })
+      .webp({ quality: 85 })
+      .toBuffer();
+  } catch {
+    throw new ImageError('invalid_image');
+  }
 }

@@ -6,11 +6,15 @@ export interface LoadedImage {
   failed: boolean;
 }
 
-/** Returns null while `url` is loading, so a new map never shows the previous map's picture. */
-export function useLoadedImage(url: string): LoadedImage | null {
+/**
+ * Returns null while `url` is loading (and when there is no url), so a new picture never shows
+ * the previous one.
+ */
+export function useLoadedImage(url: string | null): LoadedImage | null {
   const [result, setResult] = useState<LoadedImage | null>(null);
 
   useEffect(() => {
+    if (!url) return;
     let cancelled = false;
     const image = new window.Image();
     image.onload = () => !cancelled && setResult({ url, image, failed: false });
@@ -22,5 +26,5 @@ export function useLoadedImage(url: string): LoadedImage | null {
     };
   }, [url]);
 
-  return result?.url === url ? result : null;
+  return url && result?.url === url ? result : null;
 }

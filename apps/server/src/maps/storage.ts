@@ -3,9 +3,12 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 
-/** `<uuid>.<ext>` for originals, `<uuid>.preview.webp` for previews. Anything else is never touched. */
+/**
+ * `<uuid>.<ext>` for map originals, `<uuid>.preview.webp` for map previews and
+ * `<uuid>.icon.webp` for character icons. Anything else is never touched.
+ */
 export const FILE_NAME_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.preview)?\.(jpg|png|webp)$/;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.preview|\.icon)?\.(jpg|png|webp)$/;
 
 export const CONTENT_TYPES: Record<string, string> = {
   jpg: 'image/jpeg',

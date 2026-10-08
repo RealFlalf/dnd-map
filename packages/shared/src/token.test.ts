@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { GridSettings } from './map';
 import {
   cellOf,
+  characterIconSchema,
+  defaultCharacterIcon,
+  PLAYER_ICONS,
   clampToMap,
   findBuiltinIcon,
   MONSTER_ICONS,
@@ -70,12 +73,27 @@ describe('cellOf', () => {
 });
 
 describe('icons', () => {
-  it('has unique ids and resolves stored values', () => {
-    const ids = MONSTER_ICONS.map((i) => i.id);
+  it('has unique ids across monster and player icons and resolves stored values', () => {
+    const ids = [...MONSTER_ICONS, ...PLAYER_ICONS].map((i) => i.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(findBuiltinIcon('builtin:wolf')?.label).toBe('Волк');
+    expect(findBuiltinIcon('builtin:wizard')?.label).toBe('Волшебник');
     expect(findBuiltinIcon('builtin:nope')).toBeUndefined();
     expect(findBuiltinIcon('/api/files/x.png')).toBeUndefined();
+  });
+
+  it('gives every participant a valid default that does not change', () => {
+    for (const id of ['a', 'cmuzvc4fj00057kd8cgisvmbg', 'x'.repeat(40), '']) {
+      const icon = defaultCharacterIcon(id);
+      expect(PLAYER_ICONS.map((i) => 'builtin:' + i.id)).toContain(icon);
+      expect(defaultCharacterIcon(id)).toBe(icon);
+    }
+  });
+
+  it('lets players choose player icons only', () => {
+    expect(characterIconSchema.safeParse({ icon: 'wizard' }).success).toBe(true);
+    expect(characterIconSchema.safeParse({ icon: 'dragon' }).success).toBe(false);
+    expect(characterIconSchema.safeParse({ icon: '/api/files/x.png' }).success).toBe(false);
   });
 });
 

@@ -145,3 +145,22 @@ export function nextParticipants(
 ): Promise<ParticipantView[]> {
   return waitFor(socket, 'session.participants', predicate);
 }
+
+/** `emitWithAck` for events the test deliberately sends with invalid or unusual payloads. */
+export const emitAck = <T>(socket: TestSocket, event: string, ...args: unknown[]): Promise<T> =>
+  (
+    socket.timeout(3000) as unknown as {
+      emitWithAck: (e: string, ...a: unknown[]) => Promise<T>;
+    }
+  ).emitWithAck(event, ...args);
+
+/** Everything the server sends to a socket, as text, so tests can look at the raw traffic. */
+export function recordTraffic(socket: TestSocket) {
+  const messages: string[] = [];
+  socket.onAny((event, ...args) => messages.push(`${event} ${JSON.stringify(args)}`));
+  return {
+    messages,
+    mark: () => messages.length,
+    since: (mark: number) => messages.slice(mark).join('\n'),
+  };
+}

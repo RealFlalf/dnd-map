@@ -13,7 +13,7 @@ import {
   type TokenView,
 } from '@dnd-map/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { findSession, uploadMap } from '../api';
+import { findSession, uploadIcon, uploadMap } from '../api';
 import { socket } from '../socket';
 import { forgetParticipantKey, getParticipantKey, saveParticipantKey } from '../storage';
 
@@ -52,12 +52,21 @@ export interface PlacementSpec {
 
 export interface TokenActions {
   create(spec: PlacementSpec, x: number, y: number): Promise<ActionResult>;
+  /** Player: puts their own character on the current map. */
+  placeCharacter(x: number, y: number): Promise<ActionResult>;
   /** Shows the token at its snapped position at once; the server's answer confirms or reverts it. */
   move(tokenId: string, x: number, y: number): void;
   /** Live position while dragging (throttled); other participants see the token follow. */
   drag(tokenId: string, x: number, y: number): void;
   remove(tokenId: string): void;
   setVisible(tokenId: string, visible: boolean): void;
+}
+
+export interface CharacterActions {
+  /** Picks one of the shipped player icons (by id). */
+  setIcon(iconId: string): Promise<ActionResult>;
+  /** Rejects with a user-readable message. */
+  uploadIcon(file: File): Promise<void>;
 }
 
 /** Positions of tokens that other participants are dragging right now. */
@@ -381,6 +390,20 @@ export function useSession(rawInviteCode: string) {
         }
       },
 
+      async placeCharacter(x, y) {
+        const world = worldRef.current;
+        if (!world?.currentMapId) return { ok: false, error: 'map_not_found' };
+        try {
+          const res = await socket
+            .timeout(5000)
+            .emitWithAck('character.place', { mapId: world.currentMapId, x, y });
+          if (res.ok) confirm(res.version, replace(res.token));
+          return res;
+        } catch {
+          return { ok: false, error: 'internal' };
+        }
+      },
+
       move(tokenId, x, y) {
         const world = worldRef.current;
         const map = world?.maps.find((m) => m.id === world.currentMapId);
@@ -420,5 +443,24 @@ export function useSession(rawInviteCode: string) {
     };
   }, [applyWorld, resync]);
 
-  return { state, joinAsPlayer, mapActions, tokenActions, remoteDrags };
+  const characterActions = useMemo<CharacterActions>(
+    () => ({
+      async setIcon(iconId) {
+        try {
+          return await socket.timeout(5000).emitWithAck('character.setIcon', { icon: iconId });
+        } catch {
+          return { ok: false, error: 'internal' };
+        }
+      },
+      async uploadIcon(file) {
+        const req = request.current;
+        const key = req && 'key' in req ? req.key : undefined;
+        if (!req || !key) throw new Error('Нет подключения к сессии.');
+        await uploadIcon(req.inviteCode, key, file);
+      },
+    }),
+    [],
+  );
+
+  return { state, joinAsPlayer, mapActions, tokenActions, characterActions, remoteDrags };
 }

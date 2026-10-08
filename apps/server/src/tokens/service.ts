@@ -1,8 +1,10 @@
 import {
   BUILTIN_ICON_PREFIX,
+  defaultCharacterIcon,
   MAX_TOKENS_PER_MAP,
   MONSTER_ICONS,
   placeToken,
+  type CharacterPlace,
   type Point,
   type TokenCreate,
   type TokenView,
@@ -12,7 +14,8 @@ import { bumpVersion, gridOf, logEvent, type Tx } from '../db-utils';
 import type { TokenChange } from './patch';
 import { toTokenView } from './view';
 
-type Failure = 'token_not_found' | 'map_not_found' | 'forbidden' | 'too_many_tokens';
+type Failure =
+  'token_not_found' | 'map_not_found' | 'forbidden' | 'too_many_tokens' | 'already_placed';
 export type TokenOutcome = { ok: true; change: TokenChange } | { ok: false; error: Failure };
 
 /** Decides inside the transaction whether the actor may touch the token (it is loaded fresh). */
@@ -104,6 +107,56 @@ export function createTokenService(prisma: PrismaClient) {
           name: row.name,
           at: { x: at.x, y: at.y },
           visible: row.visibleToPlayers,
+        });
+        return changeOf(version, row, false);
+      });
+    },
+
+    /** Puts a player's own character on the current map; every player has at most one per map. */
+    async placeCharacter(
+      sessionId: string,
+      participantId: string,
+      req: CharacterPlace,
+    ): Promise<TokenOutcome> {
+      return prisma.$transaction(async (tx) => {
+        const session = await tx.session.findUniqueOrThrow({
+          where: { id: sessionId },
+          select: { currentMapId: true },
+        });
+        if (session.currentMapId !== req.mapId) return fail('map_not_found');
+        const map = await tx.map.findUniqueOrThrow({ where: { id: req.mapId } });
+        const player = await tx.participant.findFirstOrThrow({
+          where: { id: participantId, sessionId },
+        });
+
+        const onMap = await tx.token.findMany({
+          where: { mapId: map.id },
+          select: { ownerParticipantId: true },
+        });
+        if (onMap.some((t) => t.ownerParticipantId === participantId))
+          return fail('already_placed');
+        if (onMap.length >= MAX_TOKENS_PER_MAP) return fail('too_many_tokens');
+
+        const at = placeToken(mapBox(map), 1, { x: req.x, y: req.y });
+        const row = await tx.token.create({
+          data: {
+            mapId: map.id,
+            type: 'player_character',
+            ownerParticipantId: participantId,
+            name: player.displayName,
+            iconUrl: player.iconUrl ?? defaultCharacterIcon(player.id),
+            x: at.x,
+            y: at.y,
+            size: 1,
+            visibleToPlayers: true,
+          },
+        });
+        const { version } = await bumpVersion(tx, sessionId);
+        await logEvent(tx, sessionId, participantId, 'token.create', {
+          tokenId: row.id,
+          name: row.name,
+          type: 'player_character',
+          at: { x: at.x, y: at.y },
         });
         return changeOf(version, row, false);
       });

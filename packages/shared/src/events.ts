@@ -7,6 +7,9 @@ import type {
   SessionState,
 } from './map';
 import type {
+  CharacterIconRequest,
+  CharacterIconResult,
+  CharacterPlace,
   TokenCreate,
   TokenDeleteResult,
   TokenDragging,
@@ -22,7 +25,7 @@ import type { JoinRequest, JoinResult, ParticipantView } from './session';
  * Socket.IO contract shared by the server and the web client.
  * Bump PROTOCOL_VERSION on any breaking change to these events.
  */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 export interface HelloPayload {
   protocolVersion: number;
@@ -65,6 +68,13 @@ export interface ClientToServerEvents {
   'token.delete': (request: TokenRef, ack: (res: TokenDeleteResult) => void) => void;
   /** Master only. Hiding a monster removes it from every player's state. */
   'token.setVisibility': (request: TokenVisibility, ack: (res: TokenResult) => void) => void;
+  /** Player only: picks one of the shipped icons. Uploaded icons go through the icon upload route. */
+  'character.setIcon': (
+    request: CharacterIconRequest,
+    ack: (res: CharacterIconResult) => void,
+  ) => void;
+  /** Player only: puts the player's own character on the current map (once per map). */
+  'character.place': (request: CharacterPlace, ack: (res: TokenResult) => void) => void;
   /** Intermediate position while dragging; fire and forget, send at most ~20 times per second. */
   'token.drag': (request: TokenMove) => void;
 }

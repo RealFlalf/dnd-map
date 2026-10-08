@@ -37,12 +37,45 @@ export const MONSTER_ICONS: readonly BuiltinIcon[] = [
   { id: 'monster', label: 'Чудовище', glyph: '👾', color: '#6a4c93' },
 ];
 
+/** Icons players can pick for their character. Ids never clash with monster ids. */
+export const PLAYER_ICONS: readonly BuiltinIcon[] = [
+  { id: 'fighter', label: 'Воин', glyph: '⚔️', color: '#8a3b2f' },
+  { id: 'knight', label: 'Рыцарь', glyph: '🤺', color: '#4a5d7a' },
+  { id: 'paladin', label: 'Паладин', glyph: '🛡️', color: '#b08a1f' },
+  { id: 'barbarian', label: 'Варвар', glyph: '🪓', color: '#7a4a2b' },
+  { id: 'wizard', label: 'Волшебник', glyph: '🧙', color: '#3f4f8f' },
+  { id: 'sorcerer', label: 'Чародей', glyph: '🔮', color: '#7a3f8f' },
+  { id: 'warlock', label: 'Колдун', glyph: '📿', color: '#5b3a6e' },
+  { id: 'cleric', label: 'Жрец', glyph: '⚕️', color: '#9c8a3a' },
+  { id: 'druid', label: 'Друид', glyph: '🌿', color: '#3f7a52' },
+  { id: 'ranger', label: 'Следопыт', glyph: '🏹', color: '#4f6b4a' },
+  { id: 'rogue', label: 'Плут', glyph: '🥷', color: '#3b3342' },
+  { id: 'monk', label: 'Монах', glyph: '🥋', color: '#a0622a' },
+  { id: 'bard', label: 'Бард', glyph: '🎻', color: '#9c4a6b' },
+  { id: 'elf', label: 'Эльф', glyph: '🧝', color: '#3f8a7a' },
+  { id: 'dwarf', label: 'Дварф', glyph: '🧔', color: '#8a5a2b' },
+  { id: 'hero', label: 'Герой', glyph: '🦸', color: '#2f6b9c' },
+];
+
 export const BUILTIN_ICON_PREFIX = 'builtin:';
 
 export function findBuiltinIcon(icon: string): BuiltinIcon | undefined {
   if (!icon.startsWith(BUILTIN_ICON_PREFIX)) return undefined;
   const id = icon.slice(BUILTIN_ICON_PREFIX.length);
-  return MONSTER_ICONS.find((i) => i.id === id);
+  return MONSTER_ICONS.find((i) => i.id === id) ?? PLAYER_ICONS.find((i) => i.id === id);
+}
+
+/** Uploaded icons are served from here (see the icon upload route). */
+export const FILES_URL_PREFIX = '/api/files/';
+
+export const MAX_ICON_BYTES = 2 * 1024 * 1024;
+export const ICON_SIZE = 256;
+
+/** A player who has not chosen an icon gets one of the shipped icons, spread by participant id. */
+export function defaultCharacterIcon(participantId: string): string {
+  let sum = 0;
+  for (const char of participantId) sum = (sum + char.charCodeAt(0)) % 9973;
+  return BUILTIN_ICON_PREFIX + PLAYER_ICONS[sum % PLAYER_ICONS.length]!.id;
 }
 
 /** What a client may know about a token. Hidden monsters are never sent to players at all. */
@@ -98,6 +131,17 @@ export type TokenRef = z.input<typeof tokenRefSchema>;
 
 export const tokenVisibilitySchema = z.object({ tokenId: id, visible: z.boolean() });
 export type TokenVisibility = z.input<typeof tokenVisibilitySchema>;
+
+export const characterIconSchema = z.object({
+  icon: z.enum(PLAYER_ICONS.map((i) => i.id) as [string, ...string[]]),
+});
+export type CharacterIconRequest = z.input<typeof characterIconSchema>;
+
+export const characterPlaceSchema = z.object({ mapId: id, x: coordinate, y: coordinate });
+export type CharacterPlace = z.input<typeof characterPlaceSchema>;
+
+/** The icon now stored for the character (`builtin:<id>` or a file URL). */
+export type CharacterIconResult = ActionResult<{ icon: string }>;
 
 export type TokenResult = ActionResult<{ version: number; token: TokenView }>;
 export type TokenDeleteResult = ActionResult<{ version: number }>;

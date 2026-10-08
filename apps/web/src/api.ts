@@ -1,5 +1,6 @@
 import {
   ACCEPTED_IMAGE_TYPES,
+  MAX_ICON_BYTES,
   MAX_IMAGE_BYTES,
   MAX_IMAGE_SIDE,
   MAX_MAPS_PER_SESSION,
@@ -37,22 +38,25 @@ const UPLOAD_ERRORS: Record<UploadError, string> = {
   too_many_maps: `В сессии уже ${MAX_MAPS_PER_SESSION} карт. Удалите ненужные и повторите.`,
 };
 
-/** Uploads a map image; the server then announces it to everyone through `state.snapshot`. */
-export async function uploadMap(
-  inviteCode: string,
+const megabytes = (bytes: number) => bytes / 1024 / 1024;
+
+/** Sends an image as the raw request body and turns the server's answer into a readable message. */
+async function postImage(
+  url: string,
   participantKey: string,
   file: File,
+  maxBytes: number,
+  messages: Record<UploadError, string>,
 ): Promise<void> {
   if (!(ACCEPTED_IMAGE_TYPES as readonly string[]).includes(file.type)) {
-    throw new Error(UPLOAD_ERRORS.unsupported_format);
+    throw new Error(messages.unsupported_format);
   }
-  if (file.size > MAX_IMAGE_BYTES) {
-    throw new Error(`Файл больше ${MAX_IMAGE_BYTES / 1024 / 1024} МБ.`);
-  }
+  const tooBig = `Файл больше ${megabytes(maxBytes)} МБ.`;
+  if (file.size > maxBytes) throw new Error(tooBig);
 
   let res: Response;
   try {
-    res = await fetch(`/api/sessions/${encodeURIComponent(inviteCode)}/maps`, {
+    res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': file.type, 'X-Participant-Key': participantKey },
       body: file,
@@ -63,7 +67,28 @@ export async function uploadMap(
   if (res.ok) return;
 
   const body = (await res.json().catch(() => null)) as { error?: UploadError } | null;
-  if (res.status === 413 && !body?.error)
-    throw new Error(`Файл больше ${MAX_IMAGE_BYTES / 1024 / 1024} МБ.`);
-  throw new Error((body?.error && UPLOAD_ERRORS[body.error]) || `Ошибка сервера (${res.status}).`);
+  if (res.status === 413 && !body?.error) throw new Error(tooBig);
+  throw new Error((body?.error && messages[body.error]) || `Ошибка сервера (${res.status}).`);
+}
+
+/** Uploads a map image; the server then announces it to everyone through `state.snapshot`. */
+export function uploadMap(inviteCode: string, participantKey: string, file: File): Promise<void> {
+  return postImage(
+    `/api/sessions/${encodeURIComponent(inviteCode)}/maps`,
+    participantKey,
+    file,
+    MAX_IMAGE_BYTES,
+    UPLOAD_ERRORS,
+  );
+}
+
+/** Uploads a character icon; the server crops it to a square and announces it to everyone. */
+export function uploadIcon(inviteCode: string, participantKey: string, file: File): Promise<void> {
+  return postImage(
+    `/api/sessions/${encodeURIComponent(inviteCode)}/icon`,
+    participantKey,
+    file,
+    MAX_ICON_BYTES,
+    { ...UPLOAD_ERRORS, forbidden: 'Значок персонажа может загрузить только игрок.' },
+  );
 }

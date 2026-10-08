@@ -47,6 +47,8 @@ export interface ParticipantView {
   displayName: string;
   role: Role;
   online: boolean;
+  /** Character icon: `builtin:<id>` or a file URL. Masters have none worth showing. */
+  icon: string;
 }
 
 export type JoinError =

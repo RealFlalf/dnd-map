@@ -2,6 +2,8 @@ import Fastify from 'fastify';
 import { Server } from 'socket.io';
 import type { Config } from './config';
 import type { Db } from './db';
+import { registerCharacterRoutes } from './characters/routes';
+import { createCharacterService } from './characters/service';
 import { registerMapRoutes } from './maps/routes';
 import { createMapService } from './maps/service';
 import { createLocalStorage } from './maps/storage';
@@ -23,6 +25,7 @@ export async function buildApp({ config, db }: AppDeps) {
   const storage = createLocalStorage(config.UPLOADS_DIR);
   const maps = createMapService(db.prisma, storage);
   const tokens = createTokenService(db.prisma);
+  const characters = createCharacterService(db.prisma, storage);
 
   app.get('/api/health', async (_req, reply) => {
     try {
@@ -38,8 +41,9 @@ export async function buildApp({ config, db }: AppDeps) {
   const io: IoServer = new Server(app.server, {
     cors: { origin: config.CORS_ORIGIN },
   });
-  const realtime = registerRealtime(io, { sessions, maps, tokens, log: app.log });
+  const realtime = registerRealtime(io, { sessions, maps, tokens, characters, log: app.log });
   registerMapRoutes(app, { sessions, maps, storage, realtime });
+  registerCharacterRoutes(app, { sessions, characters, storage, realtime });
 
   // Open websockets would otherwise keep the HTTP server from closing.
   app.addHook('preClose', async () => {
