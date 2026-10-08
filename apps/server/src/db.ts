@@ -1,12 +1,12 @@
 import { PrismaClient } from '@prisma/client';
 
-/** Narrow view of the database that the HTTP/realtime layers depend on (easy to fake in tests). */
 export interface Db {
+  prisma: PrismaClient;
   ping(): Promise<void>;
   close(): Promise<void>;
 }
 
-export function createDb(databaseUrl: string): Db & { prisma: PrismaClient } {
+export function createDb(databaseUrl: string): Db {
   const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
   return {
     prisma,

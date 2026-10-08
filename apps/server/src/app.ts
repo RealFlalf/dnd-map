@@ -3,6 +3,8 @@ import { Server } from 'socket.io';
 import type { Config } from './config';
 import type { Db } from './db';
 import { registerRealtime, type IoServer } from './realtime';
+import { registerSessionRoutes } from './sessions/routes';
+import { createSessionService } from './sessions/service';
 
 export interface AppDeps {
   config: Config;
@@ -13,6 +15,7 @@ export async function buildApp({ config, db }: AppDeps) {
   const app = Fastify({
     logger: config.NODE_ENV === 'test' ? false : { level: 'info' },
   });
+  const sessions = createSessionService(db.prisma);
 
   app.get('/api/health', async (_req, reply) => {
     try {
@@ -23,11 +26,12 @@ export async function buildApp({ config, db }: AppDeps) {
       return reply.code(503).send({ status: 'degraded', db: 'unavailable' });
     }
   });
+  registerSessionRoutes(app, sessions);
 
   const io: IoServer = new Server(app.server, {
     cors: { origin: config.CORS_ORIGIN },
   });
-  registerRealtime(io);
+  const realtime = registerRealtime(io, { sessions, log: app.log });
 
   // Open websockets would otherwise keep the HTTP server from closing.
   app.addHook('preClose', async () => {
@@ -35,6 +39,8 @@ export async function buildApp({ config, db }: AppDeps) {
   });
   app.addHook('onClose', async () => {
     await new Promise<void>((resolve) => io.close(() => resolve()));
+    // Disconnect handlers still write to the DB; the caller closes the DB right after app.close().
+    await realtime.drain();
   });
 
   return Object.assign(app, { io });

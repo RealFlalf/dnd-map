@@ -1,15 +1,272 @@
 :root {
   color-scheme: light dark;
+  --bg: #f6f4ef;
+  --surface: #ffffff;
+  --text: #1f1d1a;
+  --muted: #6b665e;
+  --border: #ddd7cc;
+  --accent: #8a3b12;
+  --accent-text: #ffffff;
+  --ok: #2f7d32;
+  --warn: #b26a00;
+  --error: #b3261e;
   font-family: system-ui, sans-serif;
   line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171614;
+    --surface: #22201d;
+    --text: #ece8e1;
+    --muted: #a39d93;
+    --border: #3a3631;
+    --accent: #e08a52;
+    --accent-text: #1b1208;
+    --ok: #6cc070;
+    --warn: #f0b450;
+    --error: #f2847c;
+  }
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
+  background: var(--bg);
 }
 
-.status {
-  max-width: 40rem;
-  margin: 0 auto;
+h1,
+h2,
+h3 {
+  margin: 0 0 0.5rem;
+  line-height: 1.2;
+}
+
+h3 {
+  font-size: 1rem;
+}
+
+a {
+  color: var(--accent);
+}
+
+.muted {
+  color: var(--muted);
+  margin: 0 0 1rem;
+}
+
+.error {
+  color: var(--error);
+  margin: 0;
+}
+
+/* Forms */
+label {
+  display: grid;
+  gap: 0.25rem;
+  font-weight: 500;
+}
+
+input {
+  font: inherit;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  width: 100%;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.55rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Pages */
+.page {
   padding: 2rem 1rem;
+}
+
+.narrow {
+  max-width: 28rem;
+  margin: 0 auto;
+}
+
+.centered {
+  text-align: center;
+  padding-top: 20vh;
+}
+
+.card {
+  display: grid;
+  gap: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.card .muted {
+  margin: 0;
+}
+
+/* Session */
+.session {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+.session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.brand {
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.badge {
+  font-size: 0.85rem;
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.badge.ok {
+  color: var(--ok);
+}
+
+.badge.warn {
+  color: var(--warn);
+}
+
+.session-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.map-placeholder {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  text-align: center;
+}
+
+.sidebar {
+  width: 18rem;
+  padding: 1rem;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: 1.25rem;
+}
+
+.sidebar p {
+  margin: 0;
+}
+
+.invite {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.invite .muted {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.invite-code {
+  font-size: 1.4rem;
+  letter-spacing: 0.15em;
+  font-weight: 700;
+}
+
+.participants {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.participants li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.participants li.offline {
+  color: var(--muted);
+}
+
+.participants .name {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--border);
+  flex: none;
+}
+
+.dot.on {
+  background: var(--ok);
+}
+
+.role {
+  font-size: 0.75rem;
+  color: var(--accent);
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 0.35rem;
+}
+
+/* Phones: sidebar moves under the map area. */
+@media (max-width: 700px) {
+  .session-body {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: auto;
+    max-height: 45dvh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
 }

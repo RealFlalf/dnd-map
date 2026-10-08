@@ -1,0 +1,37 @@
+import type { ParticipantView } from '@dnd-map/shared';
+
+export function ParticipantList({
+  participants,
+  selfId,
+}: {
+  participants: ParticipantView[];
+  selfId: string;
+}) {
+  // Master first, then online players, then those who left.
+  const sorted = [...participants].sort(
+    (a, b) =>
+      Number(b.role === 'master') - Number(a.role === 'master') ||
+      Number(b.online) - Number(a.online),
+  );
+
+  return (
+    <section>
+      <h3>Участники ({participants.filter((p) => p.online).length} онлайн)</h3>
+      <ul className="participants">
+        {sorted.map((p) => (
+          <li key={p.id} className={p.online ? '' : 'offline'}>
+            <span
+              className={p.online ? 'dot on' : 'dot'}
+              aria-label={p.online ? 'онлайн' : 'офлайн'}
+            />
+            <span className="name">
+              {p.displayName}
+              {p.id === selfId && ' (вы)'}
+            </span>
+            {p.role === 'master' && <span className="role">Мастер</span>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
