@@ -36,6 +36,7 @@ import type { Server, Socket } from 'socket.io';
 import type { CharacterService } from './characters/service';
 import type { MapService } from './maps/service';
 import type { SessionService } from './sessions/service';
+import { createSocketGuard } from './rate-limit';
 import { patchFor, type TokenChange } from './tokens/patch';
 import type { TokenOutcome, TokenService } from './tokens/service';
 
@@ -55,6 +56,8 @@ interface RealtimeDeps {
   maps: MapService;
   tokens: TokenService;
   characters: CharacterService;
+  /** Drop events from connections that send too many (see rate-limit.ts). */
+  rateLimit: boolean;
   log: FastifyBaseLogger;
 }
 
@@ -71,7 +74,7 @@ export interface Realtime {
 
 export function registerRealtime(
   io: IoServer,
-  { sessions, maps, tokens, characters, log }: RealtimeDeps,
+  { sessions, maps, tokens, characters, rateLimit, log }: RealtimeDeps,
 ): Realtime {
   const inFlight = new Set<Promise<void>>();
   const track = (work: Promise<void>): void => {
@@ -351,6 +354,10 @@ export function registerRealtime(
   };
 
   io.on('connection', (socket) => {
+    socket.use(
+      createSocketGuard({ enabled: rateLimit, disconnect: () => socket.disconnect(true) }),
+    );
+
     socket.emit('system.hello', { protocolVersion: PROTOCOL_VERSION });
 
     socket.on('system.ping', (ack) => {

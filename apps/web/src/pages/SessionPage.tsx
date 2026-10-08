@@ -22,13 +22,14 @@ const errorText: Record<JoinError | 'network', string> = {
   session_not_found: 'Сессия не найдена.',
   unknown_participant: 'Не удалось восстановить участника.',
   session_full: 'В сессии уже максимум участников.',
+  rate_limited: 'Слишком много запросов. Подождите минуту и обновите страницу.',
   internal: 'Ошибка сервера. Попробуйте обновить страницу.',
   network: 'Сервер недоступен. Проверьте соединение и обновите страницу.',
 };
 
 export function SessionPage() {
   const { inviteCode = '' } = useParams();
-  const { state, joinAsPlayer, mapActions, tokenActions, characterActions, remoteDrags } =
+  const { state, outdated, joinAsPlayer, mapActions, tokenActions, characterActions, remoteDrags } =
     useSession(inviteCode);
 
   switch (state.status) {
@@ -71,6 +72,7 @@ export function SessionPage() {
           tokenActions={tokenActions}
           characterActions={characterActions}
           remoteDrags={remoteDrags}
+          outdated={outdated}
         />
       );
   }
@@ -83,6 +85,8 @@ const placeErrors: Record<string, string> = {
   map_not_found: 'Сначала загрузите карту.',
   forbidden: 'Фишки мобов может ставить только Мастер.',
   already_placed: 'Ваш персонаж уже стоит на этой карте.',
+  offline: 'Нет связи с сервером — действие не выполнено.',
+  rate_limited: 'Слишком быстро. Подождите секунду.',
 };
 
 function JoinedView({
@@ -91,7 +95,9 @@ function JoinedView({
   tokenActions,
   characterActions,
   remoteDrags,
+  outdated,
 }: {
+  outdated: boolean;
   state: Joined;
   actions: MapActions;
   tokenActions: TokenActions;
@@ -104,6 +110,7 @@ function JoinedView({
   const [focus, setFocus] = useState<{ x: number; y: number; nonce: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const { world, self } = state;
+  const offline = !state.connected;
   const isMaster = self.role === 'master';
   const currentMap = world.maps.find((m) => m.id === world.currentMapId) ?? null;
   // The participant list is kept fresh by the server (icons change), `self` is the join-time snapshot.
@@ -114,13 +121,15 @@ function JoinedView({
   // A selection of a token that is gone (deleted, hidden, other map) simply stops applying.
   const selected = world.tokens.find((t) => t.id === selectedId) ?? null;
 
+  // Without a connection nothing can be moved: a drop would only have to be taken back.
   const canMove = useCallback(
     (t: TokenView) =>
+      !offline &&
       can({ participantId: self.id, role: self.role }, 'token.move', {
         type: t.type,
         ownerParticipantId: t.ownerParticipantId,
       }),
-    [self.id, self.role],
+    [offline, self.id, self.role],
   );
 
   const canDelete = useCallback(
@@ -144,6 +153,21 @@ function JoinedView({
     },
     [tokenActions],
   );
+
+  // On a phone the panels live in a sheet below the map. It starts open when there is nothing to
+  // look at yet (no map) or the player still has to place a character, and closes when the user
+  // starts placing or calibrating so that the whole map can be tapped.
+  const [sheetOpen, setSheetOpen] = useState(() => !currentMap || (!isMaster && !myCharacter));
+  useEffect(() => {
+    if (placing || calibrating) setSheetOpen(false);
+  }, [placing, calibrating]);
+
+  useEffect(() => {
+    if (offline) {
+      setPlacing(null);
+      setCalibrating(false);
+    }
+  }, [offline]);
 
   useEffect(() => {
     if (!notice) return;
@@ -175,7 +199,15 @@ function JoinedView({
   }, [canDelete, selected, tokenActions]);
 
   return (
-    <div className="session">
+    <div className={offline ? 'session offline' : 'session'}>
+      {outdated && (
+        <div className="update-banner" role="alert">
+          Вышла новая версия приложения.
+          <button type="button" onClick={() => window.location.reload()}>
+            Обновить страницу
+          </button>
+        </div>
+      )}
       <header className="session-header">
         <Link to="/" className="brand">
           DnD Map
@@ -214,13 +246,26 @@ function JoinedView({
                 : 'Мастер ещё не загрузил карту.'}
             </p>
           )}
+          {offline && (
+            <div className="map-hint offline-pill" role="status">
+              Нет связи — переподключаемся…
+            </div>
+          )}
           {notice && (
             <div className="toast" role="status">
               {notice}
             </div>
           )}
         </section>
-        <aside className="sidebar">
+        <button
+          type="button"
+          className="sheet-handle"
+          aria-expanded={sheetOpen}
+          onClick={() => setSheetOpen((open) => !open)}
+        >
+          {sheetOpen ? 'Скрыть панель ▾' : 'Панель ▴'}
+        </button>
+        <aside className={sheetOpen ? 'sidebar open' : 'sidebar'}>
           <p>
             Вы — <strong>{self.displayName}</strong>, {isMaster ? 'Мастер' : 'Игрок'}
           </p>

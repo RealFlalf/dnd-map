@@ -298,27 +298,28 @@ export function MapCanvas({
             }
           }}
         >
+          {/* Picture and grid share one canvas: every extra full-screen layer costs time per frame. */}
           <Layer listening={false}>
             {loaded?.image && (
               <KonvaImage image={loaded.image} width={map.width} height={map.height} />
             )}
+            {map.grid.visible && (
+              <>
+                <Shape
+                  sceneFunc={draw}
+                  stroke="rgba(0,0,0,0.45)"
+                  strokeWidth={3}
+                  strokeScaleEnabled={false}
+                />
+                <Shape
+                  sceneFunc={draw}
+                  stroke="rgba(255,255,255,0.85)"
+                  strokeWidth={1}
+                  strokeScaleEnabled={false}
+                />
+              </>
+            )}
           </Layer>
-          {map.grid.visible && (
-            <Layer listening={false}>
-              <Shape
-                sceneFunc={draw}
-                stroke="rgba(0,0,0,0.45)"
-                strokeWidth={3}
-                strokeScaleEnabled={false}
-              />
-              <Shape
-                sceneFunc={draw}
-                stroke="rgba(255,255,255,0.85)"
-                strokeWidth={1}
-                strokeScaleEnabled={false}
-              />
-            </Layer>
-          )}
           <TokenLayer
             tokens={tokens.list}
             grid={map.grid}

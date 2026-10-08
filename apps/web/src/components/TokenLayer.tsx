@@ -1,6 +1,6 @@
 import type { GridSettings, TokenView } from '@dnd-map/shared';
 import Konva from 'konva';
-import { useEffect, useRef } from 'react';
+import { memo, useCallback, useEffect, useRef } from 'react';
 import { Circle, Group, Image as KonvaImage, Layer, Text } from 'react-konva';
 import type { RemoteDrags } from '../session/useSession';
 import { EMOJI_FONT, iconFace } from './TokenIcon';
@@ -23,7 +23,16 @@ interface Props {
   onMove(tokenId: string, x: number, y: number): void;
 }
 
-export function TokenLayer({ tokens, remoteDrags, interactive, ...rest }: Props) {
+/**
+ * Memoized: panning and zooming change the view many times a second, and none of that concerns
+ * the tokens. Without this every frame would re-render (and diff) every token.
+ */
+export const TokenLayer = memo(function TokenLayer({
+  tokens,
+  remoteDrags,
+  interactive,
+  ...rest
+}: Props) {
   return (
     <Layer listening={interactive}>
       {tokens.map((token) => (
@@ -31,9 +40,9 @@ export function TokenLayer({ tokens, remoteDrags, interactive, ...rest }: Props)
       ))}
     </Layer>
   );
-}
+});
 
-function TokenNode({
+const TokenNode = memo(function TokenNode({
   token,
   remote,
   grid,
@@ -56,19 +65,38 @@ function TokenNode({
   const face = iconFace(token.icon);
   const picture = useLoadedImage(face.kind === 'image' ? face.url : null);
 
-  useEffect(() => {
+  const targetRef = useRef(target);
+  targetRef.current = target;
+
+  /** Moves the node to where the data says the token is. */
+  const slideToTarget = useCallback(() => {
     const node = group.current;
-    if (!node || node.isDragging()) return;
+    if (!node) return;
     tween.current?.destroy();
     tween.current = new Konva.Tween({
       node,
-      x: target.x,
-      y: target.y,
+      x: targetRef.current.x,
+      y: targetRef.current.y,
       duration: MOVE_TWEEN_SECONDS,
       easing: Konva.Easings.EaseOut,
     });
     tween.current.play();
-  }, [target.x, target.y]);
+  }, []);
+
+  // Follow the data: remote drags, confirmed moves, and corrections after a refused move (which
+  // arrive as a new token object even when the position is the same).
+  useEffect(() => {
+    if (!group.current?.isDragging()) slideToTarget();
+  }, [target.x, target.y, token, slideToTarget]);
+
+  // When a token stops being movable in the middle of a drag (the connection was lost), Konva drops
+  // the drag silently, without a drag-end event, and the node would stay where the finger was.
+  const movable = canMove(token);
+  useEffect(() => {
+    if (movable) return;
+    if (group.current?.isDragging()) group.current.stopDrag();
+    slideToTarget();
+  }, [movable, slideToTarget]);
 
   useEffect(() => () => tween.current?.destroy(), []);
 
@@ -80,7 +108,7 @@ function TokenNode({
       ref={group}
       x={start.current.x}
       y={start.current.y}
-      draggable={canMove(token)}
+      draggable={movable}
       opacity={token.visible ? 1 : 0.55}
       // Without this the press would also start panning the map (the stage is draggable too).
       onMouseDown={(e) => void (e.cancelBubble = true)}
@@ -97,6 +125,8 @@ function TokenNode({
       {selected && (
         <Circle radius={radius + 5} stroke="#e08a52" strokeWidth={3} strokeScaleEnabled={false} />
       )}
+      {/* A offset dark disc instead of a blurred shadow: blurring costs a lot on every frame. */}
+      <Circle x={2} y={3} radius={radius} fill="rgba(0,0,0,0.35)" listening={false} />
       <Circle
         radius={radius}
         fill={face.kind === 'emoji' ? face.color : '#6b665e'}
@@ -104,9 +134,7 @@ function TokenNode({
         strokeWidth={2}
         strokeScaleEnabled={false}
         dash={token.visible ? undefined : [6, 4]}
-        shadowColor="#000000"
-        shadowBlur={6}
-        shadowOpacity={0.45}
+        perfectDrawEnabled={false}
       />
       {face.kind === 'emoji' && (
         <Text
@@ -140,4 +168,4 @@ function TokenNode({
       )}
     </Group>
   );
-}
+});

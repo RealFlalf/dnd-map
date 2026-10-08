@@ -6,6 +6,10 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
   DATABASE_URL: z.string().min(1),
   UPLOADS_DIR: z.string().default('uploads'),
+  /** Per-connection and per-address request limits; turn off only for tests. */
+  RATE_LIMIT: z.enum(['on', 'off']).default('on'),
+  /** Set to 'true' behind a reverse proxy so limits use the real client address. */
+  TRUST_PROXY: z.enum(['true', 'false']).default('false'),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
 });
 

@@ -52,7 +52,12 @@ export interface ParticipantView {
 }
 
 export type JoinError =
-  'invalid_request' | 'session_not_found' | 'unknown_participant' | 'session_full' | 'internal';
+  | 'invalid_request'
+  | 'session_not_found'
+  | 'unknown_participant'
+  | 'session_full'
+  | 'rate_limited'
+  | 'internal';
 
 export type JoinResult =
   | {

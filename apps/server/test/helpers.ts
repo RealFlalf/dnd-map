@@ -24,6 +24,8 @@ export const testConfig: Config = {
   PORT: 0,
   DATABASE_URL: process.env.DATABASE_URL!,
   UPLOADS_DIR: path.join(tmpdir(), 'dnd-map-test-uploads'),
+  RATE_LIMIT: 'off',
+  TRUST_PROXY: 'false',
   CORS_ORIGIN: 'http://localhost:5173',
 };
 
@@ -38,16 +40,24 @@ export async function resetDb(db: Db): Promise<void> {
 }
 
 /** Starts the app on a random port with its own upload directory; returns helpers and a teardown. */
-export async function startServer(db: Db) {
-  const uploadsDir = await mkdtemp(path.join(tmpdir(), 'dnd-map-test-'));
-  const app = await buildApp({ config: { ...testConfig, UPLOADS_DIR: uploadsDir }, db });
-  await app.listen({ host: '127.0.0.1', port: 0 });
+export async function startServer(
+  db: Db,
+  options: { config?: Partial<Config>; uploadsDir?: string; port?: number } = {},
+) {
+  const ownsUploads = !options.uploadsDir;
+  const uploadsDir = options.uploadsDir ?? (await mkdtemp(path.join(tmpdir(), 'dnd-map-test-')));
+  const app = await buildApp({
+    config: { ...testConfig, ...options.config, UPLOADS_DIR: uploadsDir },
+    db,
+  });
+  await app.listen({ host: '127.0.0.1', port: options.port ?? 0 });
   const { port } = app.server.address() as AddressInfo;
   const sockets: TestSocket[] = [];
 
   return {
     app,
     uploadsDir,
+    port,
     async client(): Promise<TestSocket> {
       const socket: TestSocket = connect(`http://127.0.0.1:${port}`, {
         transports: ['websocket'],
@@ -64,7 +74,7 @@ export async function startServer(db: Db) {
     async close() {
       for (const s of sockets) s.disconnect();
       await app.close();
-      await rm(uploadsDir, { recursive: true, force: true });
+      if (ownsUploads) await rm(uploadsDir, { recursive: true, force: true });
     },
   };
 }

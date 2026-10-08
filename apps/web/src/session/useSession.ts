@@ -1,6 +1,7 @@
 import {
   applyGridUpdate,
   placeToken,
+  PROTOCOL_VERSION,
   type ActionResult,
   type GridChanged,
   type GridUpdate,
@@ -95,6 +96,9 @@ const applyTokensPatch = (tokens: TokenView[], patch: TokensPatch): TokenView[] 
 export function useSession(rawInviteCode: string) {
   const [state, setState] = useState<SessionState>({ status: 'loading' });
   const [remoteDrags, setRemoteDrags] = useState<RemoteDrags>({});
+  /** The server speaks a newer protocol than this page: the page must be reloaded. */
+  const [outdated, setOutdated] = useState(false);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // What to send on the next connect; switches to the key once the server has issued one.
   const request = useRef<JoinRequest | null>(null);
   // Latest world, readable from socket handlers without waiting for a render.
@@ -186,9 +190,27 @@ export function useSession(rawInviteCode: string) {
     let cancelled = false;
     const queue = gridQueue.current;
     const timers = dragTimers.current;
-    const onConnect = () => void sendJoin();
-    const onDisconnect = () =>
+    const onConnect = () => {
+      clearTimeout(reconnectTimer.current);
+      void sendJoin();
+    };
+    const onDisconnect = (reason: string) => {
       setState((s) => (s.status === 'joined' ? { ...s, connected: false } : s));
+      // When the server closes a connection itself (a deploy, flood protection) socket.io does not
+      // reconnect on its own. Come back after a random pause so that nobody storms the new server together.
+      if (reason === 'io server disconnect' && request.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = setTimeout(() => socket.connect(), 1000 + Math.random() * 2000);
+      }
+    };
+    const onHello = ({ protocolVersion }: { protocolVersion: number }) =>
+      setOutdated(protocolVersion !== PROTOCOL_VERSION);
+    // A phone that slept or lost its network does not notice quickly; look again when it wakes up.
+    const onWake = () => {
+      if (document.visibilityState !== 'visible' || !request.current) return;
+      if (!socket.connected) socket.connect();
+      else void resync();
+    };
     const onParticipants = (participants: ParticipantView[]) =>
       setState((s) => (s.status === 'joined' ? { ...s, participants } : s));
     const onSnapshot = (world: WorldState) => {
@@ -229,6 +251,9 @@ export function useSession(rawInviteCode: string) {
 
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
+    socket.on('system.hello', onHello);
+    document.addEventListener('visibilitychange', onWake);
+    window.addEventListener('online', onWake);
     socket.on('session.participants', onParticipants);
     socket.on('state.snapshot', onSnapshot);
     socket.on('grid.changed', onGridChanged);
@@ -256,6 +281,10 @@ export function useSession(rawInviteCode: string) {
       queue.pending = null;
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
+      clearTimeout(reconnectTimer.current);
+      document.removeEventListener('visibilitychange', onWake);
+      window.removeEventListener('online', onWake);
+      socket.off('system.hello', onHello);
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('session.participants', onParticipants);
@@ -308,6 +337,7 @@ export function useSession(rawInviteCode: string) {
       event: 'map.select' | 'map.delete',
       mapId: string,
     ): Promise<ActionResult> => {
+      if (!socket.connected) return { ok: false, error: 'offline' };
       try {
         const res = await socket.timeout(5000).emitWithAck(event, { mapId });
         if (!res.ok) void resync();
@@ -319,6 +349,7 @@ export function useSession(rawInviteCode: string) {
 
     return {
       updateGrid(mapId, patch) {
+        if (!socket.connected) return; // the sliders are disabled offline; never queue stale edits
         if (queue.pending && queue.mapId !== mapId) send();
         const world = worldRef.current;
         if (world) {
@@ -336,6 +367,7 @@ export function useSession(rawInviteCode: string) {
       selectMap: (mapId) => run('map.select', mapId),
       deleteMap: (mapId) => run('map.delete', mapId),
       async upload(file) {
+        if (!socket.connected) throw new Error('Нет связи с сервером.');
         const req = request.current;
         const key = req && 'key' in req ? req.key : undefined;
         if (!req || !key) throw new Error('Нет подключения к сессии.');
@@ -372,6 +404,7 @@ export function useSession(rawInviteCode: string) {
 
     return {
       async create(spec, x, y) {
+        if (!socket.connected) return { ok: false, error: 'offline' };
         const world = worldRef.current;
         if (!world?.currentMapId) return { ok: false, error: 'map_not_found' };
         try {
@@ -391,6 +424,7 @@ export function useSession(rawInviteCode: string) {
       },
 
       async placeCharacter(x, y) {
+        if (!socket.connected) return { ok: false, error: 'offline' };
         const world = worldRef.current;
         if (!world?.currentMapId) return { ok: false, error: 'map_not_found' };
         try {
@@ -408,6 +442,15 @@ export function useSession(rawInviteCode: string) {
         const world = worldRef.current;
         const map = world?.maps.find((m) => m.id === world.currentMapId);
         if (!world || !map) return;
+        if (!socket.connected) {
+          // The drop is not sent. Publish a fresh copy of the token so it slides back to where the
+          // server last had it (the token node follows its data, not where it was released).
+          applyWorld({
+            ...world,
+            tokens: world.tokens.map((t) => (t.id === tokenId ? { ...t } : t)),
+          });
+          return;
+        }
         edit(tokenId, (t) => ({ ...t, ...placeToken(map, t.size, { x, y }) }));
         socket
           .timeout(5000)
@@ -417,6 +460,7 @@ export function useSession(rawInviteCode: string) {
       },
 
       drag(tokenId, x, y) {
+        if (!socket.connected) return;
         const now = performance.now();
         if (now - lastDragSent.current < DRAG_SEND_INTERVAL_MS) return;
         lastDragSent.current = now;
@@ -424,6 +468,7 @@ export function useSession(rawInviteCode: string) {
       },
 
       remove(tokenId) {
+        if (!socket.connected) return;
         edit(tokenId, () => null);
         socket
           .timeout(5000)
@@ -433,6 +478,7 @@ export function useSession(rawInviteCode: string) {
       },
 
       setVisible(tokenId, visible) {
+        if (!socket.connected) return;
         edit(tokenId, (t) => ({ ...t, visible }));
         socket
           .timeout(5000)
@@ -446,6 +492,7 @@ export function useSession(rawInviteCode: string) {
   const characterActions = useMemo<CharacterActions>(
     () => ({
       async setIcon(iconId) {
+        if (!socket.connected) return { ok: false, error: 'offline' };
         try {
           return await socket.timeout(5000).emitWithAck('character.setIcon', { icon: iconId });
         } catch {
@@ -453,6 +500,7 @@ export function useSession(rawInviteCode: string) {
         }
       },
       async uploadIcon(file) {
+        if (!socket.connected) throw new Error('Нет связи с сервером.');
         const req = request.current;
         const key = req && 'key' in req ? req.key : undefined;
         if (!req || !key) throw new Error('Нет подключения к сессии.');
@@ -462,5 +510,13 @@ export function useSession(rawInviteCode: string) {
     [],
   );
 
-  return { state, joinAsPlayer, mapActions, tokenActions, characterActions, remoteDrags };
+  return {
+    state,
+    outdated,
+    joinAsPlayer,
+    mapActions,
+    tokenActions,
+    characterActions,
+    remoteDrags,
+  };
 }

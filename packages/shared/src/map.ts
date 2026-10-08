@@ -84,6 +84,10 @@ export type ActionError =
   | 'token_not_found'
   | 'too_many_tokens'
   | 'already_placed'
+  /** Too many requests from this connection; slow down. */
+  | 'rate_limited'
+  /** Produced by the client itself when there is no connection; the server never sends it. */
+  | 'offline'
   | 'internal';
 export type ActionResult<T extends object = object> =
   ({ ok: true } & T) | { ok: false; error: ActionError };

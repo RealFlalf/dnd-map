@@ -319,17 +319,37 @@ button:disabled {
   padding: 0 0.35rem;
 }
 
-/* Phones: sidebar moves under the map area. */
+/* Phones: the panels sit in a sheet under the map that can be folded away. */
+.sheet-handle {
+  display: none;
+}
+
 @media (max-width: 700px) {
   .session-body {
     flex-direction: column;
   }
 
-  .sidebar {
-    width: auto;
-    max-height: 45dvh;
-    border-left: none;
+  .sheet-handle {
+    display: block;
+    width: 100%;
+    border-radius: 0;
+    border: 0;
     border-top: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    padding: 0.6rem 1rem;
+  }
+
+  .sidebar {
+    display: none;
+    width: auto;
+    max-height: 55dvh;
+    border-left: none;
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+  }
+
+  .sidebar.open {
+    display: grid;
   }
 }
 
@@ -597,4 +617,59 @@ label.check {
 
 .participants .token-icon {
   border-width: 1px;
+}
+
+/* Connection state and versions */
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.4rem 1rem;
+  background: var(--warn);
+  color: #1b1208;
+  font-weight: 600;
+}
+
+.update-banner button {
+  padding: 0.2rem 0.7rem;
+  background: #1b1208;
+  border-color: #1b1208;
+  color: #fff;
+}
+
+.offline-pill {
+  background: var(--warn);
+  color: #1b1208;
+}
+
+/* Offline: the map can still be looked at, but nothing can be changed. */
+.session.offline .sidebar button,
+.session.offline .sidebar input,
+.session.offline .palette-item {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.session-header {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+}
+
+/* Fingers need bigger targets than mice. */
+@media (pointer: coarse) {
+  button,
+  .palette-item {
+    min-height: 44px;
+  }
+
+  .icon-button,
+  .zoom-controls button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  input[type='checkbox'] {
+    width: 1.3rem;
+    height: 1.3rem;
+  }
 }
