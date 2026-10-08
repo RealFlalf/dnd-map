@@ -1,11 +1,16 @@
 import type {
   ClientToServerEvents,
+  CreateSessionResponse,
   JoinRequest,
   JoinResult,
   ParticipantView,
   ServerToClientEvents,
 } from '@dnd-map/shared';
+import { mkdtemp, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import sharp from 'sharp';
 import { io as connect, type Socket } from 'socket.io-client';
 import { buildApp } from '../src/app';
 import type { Config } from '../src/config';
@@ -18,6 +23,7 @@ export const testConfig: Config = {
   HOST: '127.0.0.1',
   PORT: 0,
   DATABASE_URL: process.env.DATABASE_URL!,
+  UPLOADS_DIR: path.join(tmpdir(), 'dnd-map-test-uploads'),
   CORS_ORIGIN: 'http://localhost:5173',
 };
 
@@ -31,15 +37,17 @@ export async function resetDb(db: Db): Promise<void> {
   );
 }
 
-/** Starts the app on a random port; returns a factory for connected clients and a teardown. */
+/** Starts the app on a random port with its own upload directory; returns helpers and a teardown. */
 export async function startServer(db: Db) {
-  const app = await buildApp({ config: testConfig, db });
+  const uploadsDir = await mkdtemp(path.join(tmpdir(), 'dnd-map-test-'));
+  const app = await buildApp({ config: { ...testConfig, UPLOADS_DIR: uploadsDir }, db });
   await app.listen({ host: '127.0.0.1', port: 0 });
   const { port } = app.server.address() as AddressInfo;
   const sockets: TestSocket[] = [];
 
   return {
     app,
+    uploadsDir,
     async client(): Promise<TestSocket> {
       const socket: TestSocket = connect(`http://127.0.0.1:${port}`, {
         transports: ['websocket'],
@@ -56,30 +64,84 @@ export async function startServer(db: Db) {
     async close() {
       for (const s of sockets) s.disconnect();
       await app.close();
+      await rm(uploadsDir, { recursive: true, force: true });
     },
   };
+}
+
+export type TestServer = Awaited<ReturnType<typeof startServer>>;
+
+export async function createSession(
+  server: TestServer,
+  displayName = 'Мастер',
+): Promise<CreateSessionResponse> {
+  const res = await server.app.inject({
+    method: 'POST',
+    url: '/api/sessions',
+    payload: { displayName },
+  });
+  if (res.statusCode !== 201) throw new Error(`createSession failed: ${res.statusCode}`);
+  return res.json();
 }
 
 export function join(socket: TestSocket, request: JoinRequest): Promise<JoinResult> {
   return socket.timeout(3000).emitWithAck('session.join', request);
 }
 
-/** Resolves with the next participant list matching the predicate. */
+export async function joinOk(socket: TestSocket, request: JoinRequest) {
+  const result = await join(socket, request);
+  if (!result.ok) throw new Error(`join failed: ${result.error}`);
+  return result;
+}
+
+/** A solid-colour PNG of the given size. */
+export function pngImage(width = 64, height = 48): Promise<Buffer> {
+  return sharp({
+    create: { width, height, channels: 3, background: { r: 120, g: 160, b: 90 } },
+  })
+    .png()
+    .toBuffer();
+}
+
+export async function uploadMap(
+  server: TestServer,
+  inviteCode: string,
+  key: string | undefined,
+  body: Buffer,
+  contentType = 'image/png',
+) {
+  return server.app.inject({
+    method: 'POST',
+    url: `/api/sessions/${inviteCode}/maps`,
+    headers: { 'content-type': contentType, ...(key && { 'x-participant-key': key }) },
+    body,
+  });
+}
+
+/** Resolves with the first payload of `event` that satisfies the predicate. */
+export function waitFor<E extends keyof ServerToClientEvents>(
+  socket: TestSocket,
+  event: E,
+  predicate: (...args: Parameters<ServerToClientEvents[E]>) => boolean = () => true,
+): Promise<Parameters<ServerToClientEvents[E]>[0]> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off(event, handler as never);
+      reject(new Error(`Timed out waiting for ${event}`));
+    }, 3000);
+    const handler = (...args: Parameters<ServerToClientEvents[E]>) => {
+      if (!predicate(...args)) return;
+      clearTimeout(timer);
+      socket.off(event, handler as never);
+      resolve(args[0]);
+    };
+    socket.on(event, handler as never);
+  });
+}
+
 export function nextParticipants(
   socket: TestSocket,
   predicate: (list: ParticipantView[]) => boolean = () => true,
 ): Promise<ParticipantView[]> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      socket.off('session.participants', handler);
-      reject(new Error('Timed out waiting for session.participants'));
-    }, 3000);
-    const handler = (list: ParticipantView[]) => {
-      if (!predicate(list)) return;
-      clearTimeout(timer);
-      socket.off('session.participants', handler);
-      resolve(list);
-    };
-    socket.on('session.participants', handler);
-  });
+  return waitFor(socket, 'session.participants', predicate);
 }

@@ -1,6 +1,16 @@
-import { joinRequestSchema, MAX_PARTICIPANTS, PROTOCOL_VERSION } from '@dnd-map/shared';
+import {
+  can,
+  gridUpdateSchema,
+  joinRequestSchema,
+  mapRefSchema,
+  MAX_PARTICIPANTS,
+  PROTOCOL_VERSION,
+} from '@dnd-map/shared';
 import type {
+  ActionResult,
+  Actor,
   ClientToServerEvents,
+  GridUpdateResult,
   JoinRequest,
   JoinResult,
   ParticipantView,
@@ -10,6 +20,7 @@ import type {
 import type { Participant } from '@prisma/client';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Server, Socket } from 'socket.io';
+import type { MapService } from './maps/service';
 import type { SessionService } from './sessions/service';
 
 /** Set by a successful `session.join`; the room name is the session id. */
@@ -22,15 +33,18 @@ type IoSocket = Socket<ClientToServerEvents, ServerToClientEvents, object, Socke
 
 interface RealtimeDeps {
   sessions: SessionService;
+  maps: MapService;
   log: FastifyBaseLogger;
 }
 
 export interface Realtime {
+  /** Sends the complete current state of a session to everyone who has joined it. */
+  broadcastState(sessionId: string): Promise<void>;
   /** Resolves once every in-flight event handler has finished (used on shutdown, before closing the DB). */
   drain(): Promise<void>;
 }
 
-export function registerRealtime(io: IoServer, { sessions, log }: RealtimeDeps): Realtime {
+export function registerRealtime(io: IoServer, { sessions, maps, log }: RealtimeDeps): Realtime {
   const inFlight = new Set<Promise<void>>();
   const track = (work: Promise<void>): void => {
     inFlight.add(work);
@@ -52,6 +66,51 @@ export function registerRealtime(io: IoServer, { sessions, log }: RealtimeDeps):
 
   const broadcastParticipants = async (sessionId: string): Promise<void> => {
     io.to(sessionId).emit('session.participants', await participantViews(sessionId));
+  };
+
+  const broadcastState = async (sessionId: string): Promise<void> => {
+    io.to(sessionId).emit('state.snapshot', await maps.getState(sessionId));
+  };
+
+  const actorOf = (joined: NonNullable<SocketData['session']>): Actor => ({
+    participantId: joined.participantId,
+    role: joined.role,
+  });
+
+  const gridUpdate = async (socket: IoSocket, request: unknown): Promise<GridUpdateResult> => {
+    const joined = socket.data.session;
+    if (!joined) return { ok: false, error: 'not_joined' };
+    if (!can(actorOf(joined), 'grid.update')) return { ok: false, error: 'forbidden' };
+    const parsed = gridUpdateSchema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'invalid_request' };
+
+    const result = await maps.updateGrid(joined.sessionId, parsed.data);
+    if (!result) return { ok: false, error: 'map_not_found' };
+
+    socket.to(joined.sessionId).emit('grid.changed', {
+      version: result.version,
+      mapId: parsed.data.mapId,
+      grid: result.grid,
+    });
+    return { ok: true, ...result };
+  };
+
+  /** Shared by map.select and map.delete: master only, then `run` reports whether the map existed. */
+  const mapAction = async (
+    socket: IoSocket,
+    request: unknown,
+    run: (sessionId: string, mapId: string) => Promise<boolean>,
+  ): Promise<ActionResult> => {
+    const joined = socket.data.session;
+    if (!joined) return { ok: false, error: 'not_joined' };
+    if (!can(actorOf(joined), 'map.set')) return { ok: false, error: 'forbidden' };
+    const parsed = mapRefSchema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'invalid_request' };
+
+    if (!(await run(joined.sessionId, parsed.data.mapId)))
+      return { ok: false, error: 'map_not_found' };
+    await broadcastState(joined.sessionId);
+    return { ok: true };
   };
 
   const join = async (socket: IoSocket, request: JoinRequest): Promise<JoinResult> => {
@@ -103,6 +162,7 @@ export function registerRealtime(io: IoServer, { sessions, log }: RealtimeDeps):
       inviteCode: session.inviteCode,
       self: toView(participant, true),
       participants,
+      state: await maps.getState(session.id),
       ...(participantKey && { participantKey }),
     };
   };
@@ -125,6 +185,48 @@ export function registerRealtime(io: IoServer, { sessions, log }: RealtimeDeps):
       );
     });
 
+    socket.on('state.sync', (ack) => {
+      if (typeof ack !== 'function') return;
+      const joined = socket.data.session;
+      if (!joined) return ack(null);
+      track(
+        maps.getState(joined.sessionId).then(ack, (err: unknown) => {
+          log.error(err, 'state.sync failed');
+          ack(null);
+        }),
+      );
+    });
+
+    socket.on('grid.update', (request, ack) => {
+      if (typeof ack !== 'function') return;
+      track(
+        gridUpdate(socket, request).then(ack, (err: unknown) => {
+          log.error(err, 'grid.update failed');
+          ack({ ok: false, error: 'internal' });
+        }),
+      );
+    });
+
+    socket.on('map.select', (request, ack) => {
+      if (typeof ack !== 'function') return;
+      track(
+        mapAction(socket, request, maps.selectMap).then(ack, (err: unknown) => {
+          log.error(err, 'map.select failed');
+          ack({ ok: false, error: 'internal' });
+        }),
+      );
+    });
+
+    socket.on('map.delete', (request, ack) => {
+      if (typeof ack !== 'function') return;
+      track(
+        mapAction(socket, request, maps.deleteMap).then(ack, (err: unknown) => {
+          log.error(err, 'map.delete failed');
+          ack({ ok: false, error: 'internal' });
+        }),
+      );
+    });
+
     // By the time 'disconnect' fires the socket has already left its rooms.
     socket.on('disconnect', () => {
       const joined = socket.data.session;
@@ -139,6 +241,7 @@ export function registerRealtime(io: IoServer, { sessions, log }: RealtimeDeps):
   });
 
   return {
+    broadcastState,
     async drain() {
       while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
     },

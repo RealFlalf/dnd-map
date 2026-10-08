@@ -5,6 +5,7 @@ const envSchema = z.object({
   HOST: z.string().default('127.0.0.1'),
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
   DATABASE_URL: z.string().min(1),
+  UPLOADS_DIR: z.string().default('uploads'),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
 });
 

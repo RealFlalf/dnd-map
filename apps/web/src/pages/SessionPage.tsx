@@ -1,8 +1,10 @@
 import { displayNameSchema, type JoinError } from '@dnd-map/shared';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
+import { MapCanvas } from '../components/MapCanvas';
+import { MapControls } from '../components/MapControls';
 import { ParticipantList } from '../components/ParticipantList';
-import { useSession } from '../session/useSession';
+import { useSession, type MapActions, type SessionState } from '../session/useSession';
 import { getDisplayName, saveDisplayName } from '../storage';
 
 const errorText: Record<JoinError | 'network', string> = {
@@ -16,7 +18,7 @@ const errorText: Record<JoinError | 'network', string> = {
 
 export function SessionPage() {
   const { inviteCode = '' } = useParams();
-  const { state, joinAsPlayer } = useSession(inviteCode);
+  const { state, joinAsPlayer, mapActions } = useSession(inviteCode);
 
   switch (state.status) {
     case 'loading':
@@ -51,36 +53,65 @@ export function SessionPage() {
       );
 
     case 'joined':
-      return (
-        <div className="session">
-          <header className="session-header">
-            <Link to="/" className="brand">
-              DnD Map
-            </Link>
-            <span className={state.connected ? 'badge ok' : 'badge warn'}>
-              {state.connected ? 'На связи' : 'Нет связи, переподключаемся…'}
-            </span>
-          </header>
-          <div className="session-body">
-            <section className="map-placeholder">
-              <p className="muted">
-                {state.self.role === 'master'
-                  ? 'Здесь появится карта: загрузка изображения и настройка сетки — следующий этап.'
-                  : 'Мастер ещё не загрузил карту.'}
-              </p>
-            </section>
-            <aside className="sidebar">
-              <p>
-                Вы — <strong>{state.self.displayName}</strong>,{' '}
-                {state.self.role === 'master' ? 'Мастер' : 'Игрок'}
-              </p>
-              {state.self.role === 'master' && <InviteBox inviteCode={state.inviteCode} />}
-              <ParticipantList participants={state.participants} selfId={state.self.id} />
-            </aside>
-          </div>
-        </div>
-      );
+      return <JoinedView state={state} actions={mapActions} />;
   }
+}
+
+type Joined = Extract<SessionState, { status: 'joined' }>;
+
+function JoinedView({ state, actions }: { state: Joined; actions: MapActions }) {
+  const [calibrating, setCalibrating] = useState(false);
+  const { world, self } = state;
+  const isMaster = self.role === 'master';
+  const currentMap = world.maps.find((m) => m.id === world.currentMapId) ?? null;
+
+  return (
+    <div className="session">
+      <header className="session-header">
+        <Link to="/" className="brand">
+          DnD Map
+        </Link>
+        <span className={state.connected ? 'badge ok' : 'badge warn'}>
+          {state.connected ? 'На связи' : 'Нет связи, переподключаемся…'}
+        </span>
+      </header>
+      <div className="session-body">
+        <section className="map-area">
+          {currentMap ? (
+            <MapCanvas
+              map={currentMap}
+              calibrating={calibrating && isMaster}
+              onCalibrated={(result) => {
+                actions.updateGrid(currentMap.id, result);
+                setCalibrating(false);
+              }}
+            />
+          ) : (
+            <p className="muted map-placeholder">
+              {isMaster
+                ? 'Загрузите изображение карты в панели справа.'
+                : 'Мастер ещё не загрузил карту.'}
+            </p>
+          )}
+        </section>
+        <aside className="sidebar">
+          <p>
+            Вы — <strong>{self.displayName}</strong>, {isMaster ? 'Мастер' : 'Игрок'}
+          </p>
+          {isMaster && <InviteBox inviteCode={state.inviteCode} />}
+          {isMaster && (
+            <MapControls
+              world={world}
+              actions={actions}
+              calibrating={calibrating}
+              onCalibratingChange={setCalibrating}
+            />
+          )}
+          <ParticipantList participants={state.participants} selfId={self.id} />
+        </aside>
+      </div>
+    </div>
+  );
 }
 
 function Centered({ children }: { children: ReactNode }) {

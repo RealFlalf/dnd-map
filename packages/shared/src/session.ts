@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { SessionState } from './map';
 
 export type Role = 'master' | 'player';
 
@@ -57,6 +58,7 @@ export type JoinResult =
       inviteCode: string;
       self: ParticipantView;
       participants: ParticipantView[];
+      state: SessionState;
       /** Present only when a new participant was created; must be stored by the client. */
       participantKey?: string;
     }
