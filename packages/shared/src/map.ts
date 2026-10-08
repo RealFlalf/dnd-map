@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TokenView } from './token';
 
 export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
@@ -34,6 +35,8 @@ export interface SessionState {
   version: number;
   currentMapId: string | null;
   maps: MapView[];
+  /** Tokens on the current map, as the receiving role may see them (players never get hidden monsters). */
+  tokens: TokenView[];
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -74,7 +77,13 @@ export const mapRefSchema = z.object({ mapId: z.string().min(1).max(64) });
 export type MapRef = z.input<typeof mapRefSchema>;
 
 export type ActionError =
-  'not_joined' | 'forbidden' | 'invalid_request' | 'map_not_found' | 'internal';
+  | 'not_joined'
+  | 'forbidden'
+  | 'invalid_request'
+  | 'map_not_found'
+  | 'token_not_found'
+  | 'too_many_tokens'
+  | 'internal';
 export type ActionResult<T extends object = object> =
   ({ ok: true } & T) | { ok: false; error: ActionError };
 

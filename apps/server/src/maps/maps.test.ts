@@ -67,7 +67,7 @@ const emitAck = <T>(socket: TestSocket, event: string, ...args: unknown[]): Prom
 describe('map upload', () => {
   it('stores the map, makes it current and shows it to everyone', async () => {
     const { inviteCode, masterKey, masterSocket, playerSocket, initialState } = await setup();
-    expect(initialState).toEqual({ version: 0, currentMapId: null, maps: [] });
+    expect(initialState).toEqual({ version: 0, currentMapId: null, maps: [], tokens: [] });
     const masterSees = waitFor(masterSocket, 'state.snapshot');
     const playerSees = waitFor(playerSocket, 'state.snapshot');
 

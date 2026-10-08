@@ -1,10 +1,18 @@
-import { displayNameSchema, type JoinError } from '@dnd-map/shared';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { can, displayNameSchema, type JoinError, type TokenView } from '@dnd-map/shared';
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { MapCanvas } from '../components/MapCanvas';
 import { MapControls } from '../components/MapControls';
 import { ParticipantList } from '../components/ParticipantList';
-import { useSession, type MapActions, type SessionState } from '../session/useSession';
+import { MonsterPalette, TokenList } from '../components/TokenPanels';
+import {
+  useSession,
+  type MapActions,
+  type PlacementSpec,
+  type RemoteDrags,
+  type SessionState,
+  type TokenActions,
+} from '../session/useSession';
 import { getDisplayName, saveDisplayName } from '../storage';
 
 const errorText: Record<JoinError | 'network', string> = {
@@ -18,7 +26,7 @@ const errorText: Record<JoinError | 'network', string> = {
 
 export function SessionPage() {
   const { inviteCode = '' } = useParams();
-  const { state, joinAsPlayer, mapActions } = useSession(inviteCode);
+  const { state, joinAsPlayer, mapActions, tokenActions, remoteDrags } = useSession(inviteCode);
 
   switch (state.status) {
     case 'loading':
@@ -53,17 +61,87 @@ export function SessionPage() {
       );
 
     case 'joined':
-      return <JoinedView state={state} actions={mapActions} />;
+      return (
+        <JoinedView
+          state={state}
+          actions={mapActions}
+          tokenActions={tokenActions}
+          remoteDrags={remoteDrags}
+        />
+      );
   }
 }
 
 type Joined = Extract<SessionState, { status: 'joined' }>;
 
-function JoinedView({ state, actions }: { state: Joined; actions: MapActions }) {
+const placeErrors: Record<string, string> = {
+  too_many_tokens: 'На карте уже максимум фишек. Удалите ненужные.',
+  map_not_found: 'Сначала загрузите карту.',
+  forbidden: 'Фишки может ставить только Мастер.',
+};
+
+function JoinedView({
+  state,
+  actions,
+  tokenActions,
+  remoteDrags,
+}: {
+  state: Joined;
+  actions: MapActions;
+  tokenActions: TokenActions;
+  remoteDrags: RemoteDrags;
+}) {
   const [calibrating, setCalibrating] = useState(false);
+  const [placing, setPlacing] = useState<PlacementSpec | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [focus, setFocus] = useState<{ x: number; y: number; nonce: number } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const { world, self } = state;
   const isMaster = self.role === 'master';
   const currentMap = world.maps.find((m) => m.id === world.currentMapId) ?? null;
+  // A selection of a token that is gone (deleted, hidden, other map) simply stops applying.
+  const selected = world.tokens.find((t) => t.id === selectedId) ?? null;
+
+  const canMove = useCallback(
+    (t: TokenView) =>
+      can({ participantId: self.id, role: self.role }, 'token.move', {
+        type: t.type,
+        ownerParticipantId: t.ownerParticipantId,
+      }),
+    [self.id, self.role],
+  );
+
+  const place = useCallback(
+    async (spec: PlacementSpec, x: number, y: number) => {
+      const res = await tokenActions.create(spec, x, y);
+      if (!res.ok) setNotice(placeErrors[res.error] ?? 'Не удалось поставить фишку.');
+    },
+    [tokenActions],
+  );
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  // Keyboard: Esc leaves placing mode and clears the selection; Delete removes the selected token.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing =
+        e.target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+      if (e.key === 'Escape') {
+        setPlacing(null);
+        setCalibrating(false);
+        setSelectedId(null);
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && isMaster && selected) {
+        e.preventDefault();
+        tokenActions.remove(selected.id);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isMaster, selected, tokenActions]);
 
   return (
     <div className="session">
@@ -85,6 +163,18 @@ function JoinedView({ state, actions }: { state: Joined; actions: MapActions }) 
                 actions.updateGrid(currentMap.id, result);
                 setCalibrating(false);
               }}
+              tokens={{
+                list: world.tokens,
+                selectedId: selected?.id ?? null,
+                canMove,
+                remoteDrags,
+                onSelect: setSelectedId,
+                onDrag: tokenActions.drag,
+                onMove: tokenActions.move,
+              }}
+              placing={isMaster && !calibrating ? placing : null}
+              onPlace={(spec, x, y) => void place(spec, x, y)}
+              focus={focus}
             />
           ) : (
             <p className="muted map-placeholder">
@@ -92,6 +182,11 @@ function JoinedView({ state, actions }: { state: Joined; actions: MapActions }) 
                 ? 'Загрузите изображение карты в панели справа.'
                 : 'Мастер ещё не загрузил карту.'}
             </p>
+          )}
+          {notice && (
+            <div className="toast" role="status">
+              {notice}
+            </div>
           )}
         </section>
         <aside className="sidebar">
@@ -104,8 +199,26 @@ function JoinedView({ state, actions }: { state: Joined; actions: MapActions }) 
               world={world}
               actions={actions}
               calibrating={calibrating}
-              onCalibratingChange={setCalibrating}
+              onCalibratingChange={(value) => {
+                setCalibrating(value);
+                if (value) setPlacing(null);
+              }}
             />
+          )}
+          {isMaster && currentMap && (
+            <>
+              <MonsterPalette placing={placing} onPlacingChange={setPlacing} />
+              <TokenList
+                tokens={world.tokens}
+                grid={currentMap.grid}
+                selectedId={selected?.id ?? null}
+                onSelect={(token) => {
+                  setSelectedId(token.id);
+                  setFocus({ x: token.x, y: token.y, nonce: Date.now() });
+                }}
+                actions={tokenActions}
+              />
+            </>
           )}
           <ParticipantList participants={state.participants} selfId={self.id} />
         </aside>

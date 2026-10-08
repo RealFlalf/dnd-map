@@ -6,6 +6,7 @@ import { registerMapRoutes } from './maps/routes';
 import { createMapService } from './maps/service';
 import { createLocalStorage } from './maps/storage';
 import { registerRealtime, type IoServer } from './realtime';
+import { createTokenService } from './tokens/service';
 import { registerSessionRoutes } from './sessions/routes';
 import { createSessionService } from './sessions/service';
 
@@ -21,6 +22,7 @@ export async function buildApp({ config, db }: AppDeps) {
   const sessions = createSessionService(db.prisma);
   const storage = createLocalStorage(config.UPLOADS_DIR);
   const maps = createMapService(db.prisma, storage);
+  const tokens = createTokenService(db.prisma);
 
   app.get('/api/health', async (_req, reply) => {
     try {
@@ -36,7 +38,7 @@ export async function buildApp({ config, db }: AppDeps) {
   const io: IoServer = new Server(app.server, {
     cors: { origin: config.CORS_ORIGIN },
   });
-  const realtime = registerRealtime(io, { sessions, maps, log: app.log });
+  const realtime = registerRealtime(io, { sessions, maps, tokens, log: app.log });
   registerMapRoutes(app, { sessions, maps, storage, realtime });
 
   // Open websockets would otherwise keep the HTTP server from closing.

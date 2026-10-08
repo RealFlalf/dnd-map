@@ -1,7 +1,10 @@
-import { GRID_SCALE_MAX, GRID_SCALE_MIN, type MapView } from '@dnd-map/shared';
+import { GRID_SCALE_MAX, GRID_SCALE_MIN, type MapView, type TokenView } from '@dnd-map/shared';
 import type Konva from 'konva';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { Image as KonvaImage, Layer, Rect, Shape, Stage } from 'react-konva';
+import type { PlacementSpec, RemoteDrags } from '../session/useSession';
+import { PALETTE_MIME, parsePlacement } from './placement';
+import { TokenLayer } from './TokenLayer';
 import { useElementSize } from './useElementSize';
 import { useLoadedImage } from './useLoadedImage';
 
@@ -22,8 +25,25 @@ export interface CalibrationResult {
   offsetY: number;
 }
 
+export interface TokensProps {
+  list: TokenView[];
+  selectedId: string | null;
+  canMove(token: TokenView): boolean;
+  remoteDrags: RemoteDrags;
+  /** Null clears the selection (click on empty map). */
+  onSelect(tokenId: string | null): void;
+  onDrag(tokenId: string, x: number, y: number): void;
+  onMove(tokenId: string, x: number, y: number): void;
+}
+
 interface Props {
   map: MapView;
+  tokens: TokensProps;
+  /** While set, a click on the map places a token instead of selecting. */
+  placing: PlacementSpec | null;
+  onPlace(spec: PlacementSpec, x: number, y: number): void;
+  /** Centre the view on this point; a new object (new `nonce`) is a new request. */
+  focus: { x: number; y: number; nonce: number } | null;
   /** While true, dragging draws a rectangle instead of panning; the rectangle becomes one grid cell. */
   calibrating: boolean;
   onCalibrated(result: CalibrationResult): void;
@@ -39,13 +59,23 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 /** Phones get the downscaled preview: less data and no giant textures. */
 const prefersPreview = () => window.matchMedia('(pointer: coarse)').matches;
 
-export function MapCanvas({ map, calibrating, onCalibrated }: Props) {
+export function MapCanvas({
+  map,
+  calibrating,
+  onCalibrated,
+  tokens,
+  placing,
+  onPlace,
+  focus,
+}: Props) {
   const [container, size, containerNode] = useElementSize<HTMLDivElement>();
   const stageRef = useRef<Konva.Stage>(null);
   const calibratingRef = useRef(calibrating);
   calibratingRef.current = calibrating;
   const [view, setView] = useState<View>({ x: 0, y: 0, scale: 1 });
   const [selection, setSelection] = useState<{ from: Point; to: Point } | null>(null);
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
   const fittedFor = useRef<string | null>(null);
 
   const [usePreview] = useState(prefersPreview);
@@ -76,6 +106,12 @@ export function MapCanvas({ map, calibrating, onCalibrated }: Props) {
   useEffect(() => {
     if (!calibrating) setSelection(null);
   }, [calibrating]);
+
+  useEffect(() => {
+    if (!focus) return;
+    const { width, height } = sizeRef.current;
+    setView((v) => ({ ...v, x: width / 2 - focus.x * v.scale, y: height / 2 - focus.y * v.scale }));
+  }, [focus]);
 
   const zoomAt = useCallback(
     (point: Point, factor: number) =>
@@ -123,6 +159,32 @@ export function MapCanvas({ map, calibrating, onCalibrated }: Props) {
     const left = Math.min(selection.from.x, selection.to.x);
     const top = Math.min(selection.from.y, selection.to.y);
     onCalibrated({ scale, offsetX: left, offsetY: top });
+  };
+
+  const onStageClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+    // Clicks on a token are handled by the token itself.
+    if (calibrating || e.target !== e.target.getStage()) return;
+    const p = imagePoint(e);
+    if (placing && p) onPlace(placing, p.x, p.y);
+    else tokens.onSelect(null);
+  };
+
+  const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes(PALETTE_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    const spec = parsePlacement(e.dataTransfer.getData(PALETTE_MIME));
+    if (!spec || !containerNode) return;
+    e.preventDefault();
+    const box = containerNode.getBoundingClientRect();
+    onPlace(
+      spec,
+      (e.clientX - box.left - view.x) / view.scale,
+      (e.clientY - box.top - view.y) / view.scale,
+    );
   };
 
   /**
@@ -202,9 +264,13 @@ export function MapCanvas({ map, calibrating, onCalibrated }: Props) {
   return (
     <div
       ref={container}
-      className={calibrating ? 'map-canvas calibrating' : 'map-canvas'}
+      className={['map-canvas', calibrating && 'calibrating', placing && 'placing']
+        .filter(Boolean)
+        .join(' ')}
       role="img"
       aria-label="Карта"
+      onDragOver={onDragOver}
+      onDrop={onDrop}
     >
       {size.width > 0 && (
         <Stage
@@ -223,6 +289,8 @@ export function MapCanvas({ map, calibrating, onCalibrated }: Props) {
           onTouchMove={onPointerMove}
           onMouseUp={onPointerUp}
           onTouchEnd={onPointerUp}
+          onClick={onStageClick}
+          onTap={onStageClick}
           onDragEnd={(e) => {
             // Only the stage's own drag (not a child's) moves the view.
             if (e.target === e.target.getStage()) {
@@ -251,6 +319,17 @@ export function MapCanvas({ map, calibrating, onCalibrated }: Props) {
               />
             </Layer>
           )}
+          <TokenLayer
+            tokens={tokens.list}
+            grid={map.grid}
+            selectedId={tokens.selectedId}
+            canMove={tokens.canMove}
+            remoteDrags={tokens.remoteDrags}
+            interactive={!calibrating}
+            onSelect={tokens.onSelect}
+            onDrag={tokens.onDrag}
+            onMove={tokens.onMove}
+          />
           {selection && (
             <Layer listening={false}>
               <Rect
@@ -272,6 +351,10 @@ export function MapCanvas({ map, calibrating, onCalibrated }: Props) {
       {!loaded && <div className="map-status">Загрузка карты…</div>}
       {loaded?.failed && (
         <div className="map-status error">Не удалось загрузить изображение карты.</div>
+      )}
+
+      {placing && (
+        <div className="map-hint">Нажмите на карту, чтобы поставить фишку · Esc — закончить</div>
       )}
 
       <div className="zoom-controls">

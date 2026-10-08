@@ -4,10 +4,13 @@ import {
   type GridSettings,
   type GridUpdate,
   type MapView,
+  type Role,
   type SessionState,
 } from '@dnd-map/shared';
-import type { Map as MapRow, PrismaClient } from '@prisma/client';
+import { Prisma, type Map as MapRow, type PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import { bumpVersion, gridOf } from '../db-utils';
+import { toTokenView } from '../tokens/view';
 import type { ProcessedImage } from './image';
 import type { FileStorage } from './storage';
 
@@ -23,14 +26,6 @@ const FILES_URL_PREFIX = '/api/files/';
 const fileNameOf = (url: string) => url.slice(FILES_URL_PREFIX.length);
 
 export function createMapService(prisma: PrismaClient, storage: FileStorage) {
-  const gridOf = (m: MapRow): GridSettings => ({
-    scale: m.gridScale,
-    offsetX: m.gridOffsetX,
-    offsetY: m.gridOffsetY,
-    visible: m.gridVisible,
-    snap: m.gridSnap,
-  });
-
   const toView = (m: MapRow): MapView => ({
     id: m.id,
     imageUrl: m.imageUrl,
@@ -40,14 +35,6 @@ export function createMapService(prisma: PrismaClient, storage: FileStorage) {
     grid: gridOf(m),
   });
 
-  /** Every state change bumps the session version in the same transaction as the change itself. */
-  const bumpVersion = (tx: Pick<PrismaClient, 'session'>, sessionId: string, data = {}) =>
-    tx.session.update({
-      where: { id: sessionId },
-      data: { ...data, version: { increment: 1 }, lastActivityAt: new Date() },
-      select: { version: true },
-    });
-
   const removeFiles = (maps: Array<Pick<MapRow, 'imageUrl' | 'previewUrl'>>) =>
     Promise.allSettled(
       maps.flatMap((m) =>
@@ -56,16 +43,35 @@ export function createMapService(prisma: PrismaClient, storage: FileStorage) {
     );
 
   return {
-    async getState(sessionId: string): Promise<SessionState> {
-      const session = await prisma.session.findUniqueOrThrow({
-        where: { id: sessionId },
-        select: { version: true, currentMapId: true, maps: { orderBy: { createdAt: 'asc' } } },
-      });
-      return {
-        version: session.version,
-        currentMapId: session.currentMapId,
-        maps: session.maps.map(toView),
-      };
+    /**
+     * The state as `viewer` may see it: players never get hidden monsters. Read in one snapshot so
+     * the version always matches the tokens it is sent with.
+     */
+    async getState(sessionId: string, viewer: Role): Promise<SessionState> {
+      return prisma.$transaction(
+        async (tx) => {
+          const session = await tx.session.findUniqueOrThrow({
+            where: { id: sessionId },
+            select: { version: true, currentMapId: true, maps: { orderBy: { createdAt: 'asc' } } },
+          });
+          const tokens = session.currentMapId
+            ? await tx.token.findMany({
+                where: {
+                  mapId: session.currentMapId,
+                  ...(viewer === 'player' && { visibleToPlayers: true }),
+                },
+                orderBy: { createdAt: 'asc' },
+              })
+            : [];
+          return {
+            version: session.version,
+            currentMapId: session.currentMapId,
+            maps: session.maps.map(toView),
+            tokens: tokens.map(toTokenView),
+          };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+      );
     },
 
     /** Stores the files, adds the map and makes it the current one. */

@@ -1,5 +1,6 @@
 import {
   applyGridUpdate,
+  placeToken,
   type ActionResult,
   type GridChanged,
   type GridUpdate,
@@ -7,6 +8,9 @@ import {
   type JoinRequest,
   type ParticipantView,
   type SessionState as WorldState,
+  type TokenDragging,
+  type TokensPatch,
+  type TokenView,
 } from '@dnd-map/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { findSession, uploadMap } from '../api';
@@ -23,7 +27,7 @@ export type SessionState =
       inviteCode: string;
       self: ParticipantView;
       participants: ParticipantView[];
-      /** Maps and grid, kept in step with the server through snapshots and versioned patches. */
+      /** Maps, grid and tokens, kept in step with the server through snapshots and versioned patches. */
       world: WorldState;
       connected: boolean;
     }
@@ -40,7 +44,40 @@ export interface MapActions {
   upload(file: File): Promise<void>;
 }
 
+export interface PlacementSpec {
+  icon: string;
+  size: number;
+  visible: boolean;
+}
+
+export interface TokenActions {
+  create(spec: PlacementSpec, x: number, y: number): Promise<ActionResult>;
+  /** Shows the token at its snapped position at once; the server's answer confirms or reverts it. */
+  move(tokenId: string, x: number, y: number): void;
+  /** Live position while dragging (throttled); other participants see the token follow. */
+  drag(tokenId: string, x: number, y: number): void;
+  remove(tokenId: string): void;
+  setVisible(tokenId: string, visible: boolean): void;
+}
+
+/** Positions of tokens that other participants are dragging right now. */
+export type RemoteDrags = Readonly<Record<string, { x: number; y: number }>>;
+
 const GRID_SEND_INTERVAL_MS = 100;
+const DRAG_SEND_INTERVAL_MS = 50;
+/** A remote drag that goes quiet this long (e.g. the dragger lost connection) is forgotten. */
+const REMOTE_DRAG_TIMEOUT_MS = 2000;
+
+const applyTokensPatch = (tokens: TokenView[], patch: TokensPatch): TokenView[] => {
+  const removed = new Set(patch.removedIds);
+  const next = tokens.filter((t) => !removed.has(t.id));
+  for (const token of patch.upserted) {
+    const at = next.findIndex((t) => t.id === token.id);
+    if (at >= 0) next[at] = token;
+    else next.push(token);
+  }
+  return next;
+};
 
 /**
  * Connects to a session and keeps the membership alive across reconnects:
@@ -48,6 +85,7 @@ const GRID_SEND_INTERVAL_MS = 100;
  */
 export function useSession(rawInviteCode: string) {
   const [state, setState] = useState<SessionState>({ status: 'loading' });
+  const [remoteDrags, setRemoteDrags] = useState<RemoteDrags>({});
   // What to send on the next connect; switches to the key once the server has issued one.
   const request = useRef<JoinRequest | null>(null);
   // Latest world, readable from socket handlers without waiting for a render.
@@ -57,21 +95,41 @@ export function useSession(rawInviteCode: string) {
     pending: GridPatch | null;
     timer: ReturnType<typeof setTimeout> | null;
   }>({ mapId: '', pending: null, timer: null });
+  const dragTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const lastDragSent = useRef(0);
 
   const applyWorld = useCallback((world: WorldState) => {
     worldRef.current = world;
     setState((s) => (s.status === 'joined' ? { ...s, world } : s));
   }, []);
 
+  const forgetRemoteDrags = useCallback((ids?: string[]) => {
+    const timers = dragTimers.current;
+    for (const id of ids ?? [...timers.keys()]) {
+      clearTimeout(timers.get(id));
+      timers.delete(id);
+    }
+    setRemoteDrags((drags) => {
+      if (!ids) return Object.keys(drags).length ? {} : drags;
+      if (!ids.some((id) => id in drags)) return drags;
+      const next = { ...drags };
+      for (const id of ids) delete next[id];
+      return next;
+    });
+  }, []);
+
   /** Asks the server for the full state; used after a missed update or a rejected change. */
   const resync = useCallback(async () => {
     try {
       const world = await socket.timeout(5000).emitWithAck('state.sync');
-      if (world && world.version >= (worldRef.current?.version ?? 0)) applyWorld(world);
+      if (world && world.version >= (worldRef.current?.version ?? 0)) {
+        applyWorld(world);
+        forgetRemoteDrags();
+      }
     } catch {
       // Offline: the next successful join delivers fresh state anyway.
     }
-  }, [applyWorld]);
+  }, [applyWorld, forgetRemoteDrags]);
 
   const sendJoin = useCallback(async () => {
     const req = request.current;
@@ -88,6 +146,7 @@ export function useSession(rawInviteCode: string) {
       const key = result.participantKey ?? ('key' in req ? req.key : undefined);
       if (key) request.current = { inviteCode: result.inviteCode, key };
       worldRef.current = result.state;
+      forgetRemoteDrags();
       setState({
         status: 'joined',
         inviteCode: result.inviteCode,
@@ -112,18 +171,22 @@ export function useSession(rawInviteCode: string) {
     } else {
       setState({ status: 'failed', error: result.error });
     }
-  }, []);
+  }, [forgetRemoteDrags]);
 
   useEffect(() => {
     let cancelled = false;
     const queue = gridQueue.current;
+    const timers = dragTimers.current;
     const onConnect = () => void sendJoin();
     const onDisconnect = () =>
       setState((s) => (s.status === 'joined' ? { ...s, connected: false } : s));
     const onParticipants = (participants: ParticipantView[]) =>
       setState((s) => (s.status === 'joined' ? { ...s, participants } : s));
     const onSnapshot = (world: WorldState) => {
-      if (!worldRef.current || world.version >= worldRef.current.version) applyWorld(world);
+      if (!worldRef.current || world.version >= worldRef.current.version) {
+        applyWorld(world);
+        forgetRemoteDrags();
+      }
     };
     const onGridChanged = (change: GridChanged) => {
       const world = worldRef.current;
@@ -135,12 +198,33 @@ export function useSession(rawInviteCode: string) {
         maps: world.maps.map((m) => (m.id === change.mapId ? { ...m, grid: change.grid } : m)),
       });
     };
+    const onTokensChanged = (patch: TokensPatch) => {
+      const world = worldRef.current;
+      if (!world || patch.version <= world.version) return;
+      if (patch.version > world.version + 1) return void resync();
+      applyWorld({
+        ...world,
+        version: patch.version,
+        tokens: applyTokensPatch(world.tokens, patch),
+      });
+      forgetRemoteDrags([...patch.upserted.map((t) => t.id), ...patch.removedIds]);
+    };
+    const onTokenDragging = ({ tokenId, x, y }: TokenDragging) => {
+      setRemoteDrags((drags) => ({ ...drags, [tokenId]: { x, y } }));
+      clearTimeout(timers.get(tokenId));
+      timers.set(
+        tokenId,
+        setTimeout(() => forgetRemoteDrags([tokenId]), REMOTE_DRAG_TIMEOUT_MS),
+      );
+    };
 
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('session.participants', onParticipants);
     socket.on('state.snapshot', onSnapshot);
     socket.on('grid.changed', onGridChanged);
+    socket.on('tokens.changed', onTokensChanged);
+    socket.on('token.dragging', onTokenDragging);
 
     findSession(rawInviteCode)
       .then((inviteCode) => {
@@ -161,14 +245,18 @@ export function useSession(rawInviteCode: string) {
       if (queue.timer) clearTimeout(queue.timer);
       queue.timer = null;
       queue.pending = null;
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('session.participants', onParticipants);
       socket.off('state.snapshot', onSnapshot);
       socket.off('grid.changed', onGridChanged);
+      socket.off('tokens.changed', onTokensChanged);
+      socket.off('token.dragging', onTokenDragging);
       socket.disconnect();
     };
-  }, [rawInviteCode, sendJoin, applyWorld, resync]);
+  }, [rawInviteCode, sendJoin, applyWorld, resync, forgetRemoteDrags]);
 
   const joinAsPlayer = useCallback(
     (displayName: string) => {
@@ -247,5 +335,90 @@ export function useSession(rawInviteCode: string) {
     };
   }, [applyWorld, resync]);
 
-  return { state, joinAsPlayer, mapActions };
+  const tokenActions = useMemo<TokenActions>(() => {
+    /** Applies the server's version of a token. Acks arrive in order with other events, so a gap means a loss. */
+    const confirm = (version: number, change: (tokens: TokenView[]) => TokenView[]) => {
+      const world = worldRef.current;
+      if (!world) return;
+      if (version > world.version + 1) return void resync();
+      applyWorld({
+        ...world,
+        version: Math.max(world.version, version),
+        tokens: change(world.tokens),
+      });
+    };
+
+    const replace = (token: TokenView) => (tokens: TokenView[]) =>
+      applyTokensPatch(tokens, { version: 0, upserted: [token], removedIds: [] });
+
+    /** Optimistic local edit of one token, if it exists. */
+    const edit = (tokenId: string, change: (token: TokenView) => TokenView | null) => {
+      const world = worldRef.current;
+      if (!world) return;
+      applyWorld({
+        ...world,
+        tokens: world.tokens.flatMap((t) => (t.id === tokenId ? (change(t) ?? []) : [t])),
+      });
+    };
+
+    return {
+      async create(spec, x, y) {
+        const world = worldRef.current;
+        if (!world?.currentMapId) return { ok: false, error: 'map_not_found' };
+        try {
+          const res = await socket.timeout(5000).emitWithAck('token.create', {
+            mapId: world.currentMapId,
+            icon: spec.icon,
+            size: spec.size,
+            visible: spec.visible,
+            x,
+            y,
+          });
+          if (res.ok) confirm(res.version, replace(res.token));
+          return res;
+        } catch {
+          return { ok: false, error: 'internal' };
+        }
+      },
+
+      move(tokenId, x, y) {
+        const world = worldRef.current;
+        const map = world?.maps.find((m) => m.id === world.currentMapId);
+        if (!world || !map) return;
+        edit(tokenId, (t) => ({ ...t, ...placeToken(map, t.size, { x, y }) }));
+        socket
+          .timeout(5000)
+          .emitWithAck('token.move', { tokenId, x, y })
+          .then((res) => (res.ok ? confirm(res.version, replace(res.token)) : resync()))
+          .catch(() => resync());
+      },
+
+      drag(tokenId, x, y) {
+        const now = performance.now();
+        if (now - lastDragSent.current < DRAG_SEND_INTERVAL_MS) return;
+        lastDragSent.current = now;
+        socket.volatile.emit('token.drag', { tokenId, x, y });
+      },
+
+      remove(tokenId) {
+        edit(tokenId, () => null);
+        socket
+          .timeout(5000)
+          .emitWithAck('token.delete', { tokenId })
+          .then((res) => (res.ok ? confirm(res.version, (tokens) => tokens) : resync()))
+          .catch(() => resync());
+      },
+
+      setVisible(tokenId, visible) {
+        edit(tokenId, (t) => ({ ...t, visible }));
+        socket
+          .timeout(5000)
+          .emitWithAck('token.setVisibility', { tokenId, visible })
+          .then((res) => (res.ok ? confirm(res.version, replace(res.token)) : resync()))
+          .catch(() => resync());
+      },
+    };
+  }, [applyWorld, resync]);
+
+  return { state, joinAsPlayer, mapActions, tokenActions, remoteDrags };
 }

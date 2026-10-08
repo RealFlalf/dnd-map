@@ -15,7 +15,7 @@ export interface Actor {
   role: Role;
 }
 
-export interface TokenRef {
+export interface TokenSubject {
   type: TokenType;
   ownerParticipantId: string | null;
 }
@@ -25,7 +25,7 @@ export interface TokenRef {
  * every incoming action is checked here; the client uses it only to hide controls.
  * Viewing the map is allowed to every joined participant and is not an action.
  */
-export function can(actor: Actor, action: Action, token?: TokenRef): boolean {
+export function can(actor: Actor, action: Action, token?: TokenSubject): boolean {
   switch (action) {
     case 'map.set':
     case 'grid.update':

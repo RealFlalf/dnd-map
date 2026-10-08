@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { can, type Action, type Actor, type TokenRef } from './permissions';
+import { can, type Action, type Actor, type TokenSubject } from './permissions';
 
 const master: Actor = { participantId: 'm', role: 'master' };
 const player: Actor = { participantId: 'p1', role: 'player' };
 
-const monster: TokenRef = { type: 'monster', ownerParticipantId: null };
-const ownCharacter: TokenRef = { type: 'player_character', ownerParticipantId: 'p1' };
-const otherCharacter: TokenRef = { type: 'player_character', ownerParticipantId: 'p2' };
+const monster: TokenSubject = { type: 'monster', ownerParticipantId: null };
+const ownCharacter: TokenSubject = { type: 'player_character', ownerParticipantId: 'p1' };
+const otherCharacter: TokenSubject = { type: 'player_character', ownerParticipantId: 'p2' };
 
 // One row per line of the access matrix (requirements, section 9).
-const matrix: Array<[string, Action, TokenRef | undefined, boolean, boolean]> = [
+const matrix: Array<[string, Action, TokenSubject | undefined, boolean, boolean]> = [
   // description,                         action,                token,          master, player
   ['upload / change the map', 'map.set', undefined, true, false],
   ['configure the grid', 'grid.update', undefined, true, false],
