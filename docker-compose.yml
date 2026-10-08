@@ -1,0 +1,33 @@
+# Optional: infrastructure for machines with Docker. Without Docker, use a local
+# PostgreSQL (see apps/server/prisma/setup-local-db.sql). MinIO is needed from stage 6 (S3 storage).
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: dnd_map
+      POSTGRES_PASSWORD: dnd_map
+      POSTGRES_DB: dnd_map
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dnd_map']
+      interval: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: dnd_map
+      MINIO_ROOT_PASSWORD: dnd_map_secret
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - miniodata:/data
+
+volumes:
+  pgdata:
+  miniodata:

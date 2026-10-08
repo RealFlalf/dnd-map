@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  master
+  player
+}
+
+enum TokenType {
+  monster
+  player_character
+}
+
+model Session {
+  id             String   @id @default(cuid())
+  inviteCode     String   @unique
+  masterKeyHash  String
+  /// Incremented on every state change; clients use it to detect missed updates.
+  version        Int      @default(0)
+  currentMapId   String?  @unique
+  createdAt      DateTime @default(now())
+  lastActivityAt DateTime @default(now())
+
+  currentMap   Map?          @relation("CurrentMap", fields: [currentMapId], references: [id], onDelete: SetNull)
+  maps         Map[]         @relation("SessionMaps")
+  participants Participant[]
+  events       EventLog[]
+
+  @@index([lastActivityAt])
+  @@map("sessions")
+}
+
+model Participant {
+  id          String   @id @default(cuid())
+  sessionId   String
+  role        Role
+  displayName String
+  /// Hash of the secret key kept in the browser; lets the participant reclaim their identity.
+  keyHash     String
+  createdAt   DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  session Session    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  tokens  Token[]
+  events  EventLog[]
+
+  @@unique([sessionId, keyHash])
+  @@map("participants")
+}
+
+model Map {
+  id          String   @id @default(cuid())
+  sessionId   String
+  imageUrl    String
+  previewUrl  String?
+  /// Source image size in pixels; token positions are stored in this coordinate space.
+  width       Int
+  height      Int
+  gridScale   Float    @default(70)
+  gridOffsetX Float    @default(0)
+  gridOffsetY Float    @default(0)
+  gridVisible Boolean  @default(true)
+  gridSnap    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  session         Session  @relation("SessionMaps", fields: [sessionId], references: [id], onDelete: Cascade)
+  currentInSession Session? @relation("CurrentMap")
+  tokens          Token[]
+
+  @@index([sessionId])
+  @@map("maps")
+}
+
+model Token {
+  id                 String    @id @default(cuid())
+  mapId              String
+  type               TokenType
+  /// Set for player characters; null for monsters (owned by the master).
+  ownerParticipantId String?
+  name               String
+  iconUrl            String
+  /// Token centre in source-image pixels.
+  x                  Float
+  y                  Float
+  /// Footprint in grid cells (1 = medium creature).
+  size               Int       @default(1)
+  visibleToPlayers   Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  map   Map          @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  owner Participant? @relation(fields: [ownerParticipantId], references: [id], onDelete: Cascade)
+
+  @@index([mapId])
+  @@map("tokens")
+}
+
+model EventLog {
+  id            BigInt   @id @default(autoincrement())
+  sessionId     String
+  participantId String?
+  type          String
+  payload       Json
+  createdAt     DateTime @default(now())
+
+  session     Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  participant Participant? @relation(fields: [participantId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId, createdAt])
+  @@map("event_log")
+}
