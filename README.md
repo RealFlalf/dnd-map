@@ -4,6 +4,7 @@
 
 - Требования: [analitika-servis-karta-dnd.md](analitika-servis-karta-dnd.md)
 - Устройство сервиса: [docs/architecture.md](docs/architecture.md)
+- План доработок (управление игроками, препятствия, туман войны): [plan-dorabotok.md](plan-dorabotok.md)
 - План разработки: [plan-razrabotki.md](plan-razrabotki.md)
 - Развёртывание на сервере: [docs/deploy.md](docs/deploy.md)
 
