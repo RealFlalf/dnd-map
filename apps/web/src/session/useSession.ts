@@ -42,7 +42,9 @@ export type SessionState =
       world: WorldState;
       connected: boolean;
     }
-  | { status: 'failed'; error: JoinError | 'network' };
+  | { status: 'failed'; error: JoinError | 'network' }
+  /** The master removed this player from the session; the stored key is gone. */
+  | { status: 'removed' };
 
 export type GridPatch = Omit<GridUpdate, 'mapId'>;
 
@@ -102,6 +104,11 @@ export interface TokenActions {
   drag(tokenId: string, x: number, y: number): void;
   remove(tokenId: string): void;
   setVisible(tokenId: string, visible: boolean): void;
+}
+
+export interface ParticipantActions {
+  /** Master: removes a player and their characters. Shown at once, put back if the server refuses. */
+  remove(participantId: string): Promise<ActionResult>;
 }
 
 export interface CharacterActions {
@@ -189,6 +196,12 @@ export function useSession(rawInviteCode: string) {
   const [lineSeed, setLineSeed] = useState<{ lines: LineView[]; nonce: number } | null>(null);
   const dragTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const lastDragSent = useRef(0);
+
+  // Latest participant list, for undoing an optimistic removal.
+  const participantsRef = useRef<ParticipantView[]>([]);
+  useEffect(() => {
+    if (state.status === 'joined') participantsRef.current = state.participants;
+  }, [state]);
 
   const applyWorld = useCallback((world: WorldState) => {
     worldRef.current = world;
@@ -352,6 +365,16 @@ export function useSession(rawInviteCode: string) {
         obstacles: applyObstaclesPatch(world.obstacles, patch),
       });
     };
+    // The master removed me: the key is worthless now, and there is nothing more to wait for.
+    const onRemoved = () => {
+      const req = request.current;
+      if (req) forgetParticipantKey(req.inviteCode);
+      request.current = null;
+      worldRef.current = null;
+      clearTimeout(reconnectTimer.current);
+      socket.disconnect();
+      setState({ status: 'removed' });
+    };
     const onTokenDragging = ({ tokenId, x, y }: TokenDragging) => {
       setRemoteDrags((drags) => ({ ...drags, [tokenId]: { x, y } }));
       clearTimeout(timers.get(tokenId));
@@ -372,6 +395,7 @@ export function useSession(rawInviteCode: string) {
     socket.on('tokens.changed', onTokensChanged);
     socket.on('obstacles.changed', onObstaclesChanged);
     socket.on('token.dragging', onTokenDragging);
+    socket.on('session.removed', onRemoved);
 
     findSession(rawInviteCode)
       .then((inviteCode) => {
@@ -406,6 +430,7 @@ export function useSession(rawInviteCode: string) {
       socket.off('tokens.changed', onTokensChanged);
       socket.off('obstacles.changed', onObstaclesChanged);
       socket.off('token.dragging', onTokenDragging);
+      socket.off('session.removed', onRemoved);
       socket.disconnect();
     };
   }, [rawInviteCode, sendJoin, applyWorld, resync, forgetRemoteDrags]);
@@ -752,6 +777,43 @@ export function useSession(rawInviteCode: string) {
     };
   }, [applyWorld, resync]);
 
+  const participantActions = useMemo<ParticipantActions>(
+    () => ({
+      async remove(participantId) {
+        if (!socket.connected) return { ok: false, error: 'offline' };
+        const before = participantsRef.current;
+        setState((s) =>
+          s.status === 'joined'
+            ? { ...s, participants: s.participants.filter((p) => p.id !== participantId) }
+            : s,
+        );
+        const world = worldRef.current;
+        if (world) {
+          applyWorld({
+            ...world,
+            tokens: world.tokens.filter((t) => t.ownerParticipantId !== participantId),
+          });
+        }
+        // The snapshot and the new list arrive before the answer; only a refusal needs undoing.
+        const undo = () => {
+          setState((s) => (s.status === 'joined' ? { ...s, participants: before } : s));
+          void resync();
+        };
+        try {
+          const res = await socket
+            .timeout(5000)
+            .emitWithAck('participant.remove', { participantId });
+          if (!res.ok) undo();
+          return res;
+        } catch {
+          undo();
+          return { ok: false, error: 'internal' };
+        }
+      },
+    }),
+    [applyWorld, resync],
+  );
+
   const characterActions = useMemo<CharacterActions>(
     () => ({
       async setIcon(iconId) {
@@ -782,6 +844,7 @@ export function useSession(rawInviteCode: string) {
     state,
     lines,
     drawLine,
+    participantActions,
     outdated,
     joinAsPlayer,
     mapActions,

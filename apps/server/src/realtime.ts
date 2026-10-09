@@ -15,6 +15,7 @@ import {
   obstacleMoveSchema,
   obstacleRefSchema,
   obstacleSightSchema,
+  participantRemoveSchema,
   mapRefSchema,
   MAX_PARTICIPANTS,
   PROTOCOL_VERSION,
@@ -467,6 +468,42 @@ export function registerRealtime(
       : { ok: true, version: patch.version };
   };
 
+  /**
+   * Master only: a player leaves the session for good. Their open tabs are told and taken out of
+   * the session's rooms at once, so nothing more reaches them; everybody else gets a fresh
+   * snapshot (their characters are gone) and the new list of participants.
+   */
+  const removeParticipant = async (
+    socket: IoSocket,
+    request: unknown,
+  ): Promise<ActionResult<{ version: number }>> => {
+    const joined = socket.data.session;
+    if (!joined) return { ok: false, error: 'not_joined' };
+    if (!can(actorOf(joined), 'participant.remove')) return { ok: false, error: 'forbidden' };
+    const parsed = participantRemoveSchema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'invalid_request' };
+
+    const removed = await characters.removePlayer(
+      joined.sessionId,
+      joined.participantId,
+      parsed.data.participantId,
+    );
+    if (!removed) return { ok: false, error: 'participant_not_found' };
+
+    // One server (see §12 of the architecture): its own sockets are all there is.
+    for (const s of io.of('/').sockets.values()) {
+      const theirs = s.data.session;
+      if (theirs?.participantId !== parsed.data.participantId) continue;
+      s.data.session = undefined;
+      await s.leave(theirs.sessionId);
+      await s.leave(roleRoom(theirs.sessionId, theirs.role));
+      s.emit('session.removed');
+    }
+    await broadcastState(joined.sessionId);
+    await broadcastParticipants(joined.sessionId);
+    return { ok: true, version: removed.version };
+  };
+
   /** Anyone may sketch over the current map; the line is not stored and goes away by itself. */
   const drawLine = async (socket: IoSocket, request: unknown): Promise<LineResult> => {
     const joined = socket.data.session;
@@ -652,6 +689,12 @@ export function registerRealtime(
           ),
         { ok: false, error: 'internal' } as const,
       ),
+    );
+    socket.on('participant.remove', (request, ack) =>
+      acked('participant.remove', ack, () => removeParticipant(socket, request), {
+        ok: false,
+        error: 'internal',
+      } as const),
     );
     socket.on('line.draw', (request, ack) =>
       acked('line.draw', ack, () => drawLine(socket, request), {

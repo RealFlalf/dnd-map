@@ -28,6 +28,7 @@ import {
   type FogActions,
   type MapActions,
   type ObstacleActions,
+  type ParticipantActions,
   isPlayerPlacement,
   monsterPlacing,
   type Placing,
@@ -64,6 +65,7 @@ export function SessionPage() {
     actionNotice,
     lines,
     drawLine,
+    participantActions,
   } = useSession(inviteCode);
 
   switch (state.status) {
@@ -75,6 +77,14 @@ export function SessionPage() {
       return (
         <Centered>
           <p>Сессия с кодом «{inviteCode}» не найдена.</p>
+          <Link to="/">На главную</Link>
+        </Centered>
+      );
+
+    case 'removed':
+      return (
+        <Centered>
+          <p>Мастер удалил вас из этой сессии.</p>
           <Link to="/">На главную</Link>
         </Centered>
       );
@@ -113,6 +123,7 @@ export function SessionPage() {
           actionNotice={actionNotice}
           lines={lines}
           drawLine={drawLine}
+          participantActions={participantActions}
         />
       );
   }
@@ -147,7 +158,9 @@ function JoinedView({
   actionNotice,
   lines,
   drawLine,
+  participantActions,
 }: {
+  participantActions: ParticipantActions;
   lines: LiveLine[];
   drawLine(mapId: string, points: number[]): Promise<ActionResult>;
   obstacleActions: ObstacleActions;
@@ -558,7 +571,19 @@ function JoinedView({
               />
             </>
           )}
-          <ParticipantList participants={state.participants} selfId={self.id} />
+          <ParticipantList
+            participants={state.participants}
+            selfId={self.id}
+            onRemove={
+              isMaster && !offline
+                ? (id) =>
+                    void participantActions.remove(id).then((res) => {
+                      if (!res.ok)
+                        setNotice(placeErrors[res.error] ?? 'Не удалось удалить игрока.');
+                    })
+                : undefined
+            }
+          />
         </aside>
       </div>
     </div>

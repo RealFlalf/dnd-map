@@ -541,3 +541,36 @@ test('temporary lines: master and players draw, everybody sees them, and they fa
   await expect(linesOn(master)).toHaveCount(0, { timeout: 10_000 });
   await expect(linesOn(alice)).toHaveCount(0, { timeout: 10_000 });
 });
+
+test('the master removes a player: their character goes, and they are out of the session', async ({
+  page: master,
+  browser,
+}) => {
+  const inviteUrl = await createSessionAsMaster(master);
+  await uploadMap(master, 'dungeon.png');
+  const alice = await joinAsPlayer(browser, inviteUrl, 'Алиса');
+  const bob = await joinAsPlayer(browser, inviteUrl, 'Боб');
+  await waitForMap(alice);
+  await alice.getByRole('button', { name: 'Поставить на карту' }).click();
+  await clickMap(alice, cell(4, 4));
+  await expect(tokensOn(bob)).toHaveText(['Алиса, клетка 4, 4']);
+
+  // Asked once more; "Отмена" changes nothing.
+  await master.getByRole('button', { name: 'Удалить игрока Алиса' }).click();
+  await master.getByRole('button', { name: 'Отмена' }).click();
+  await expect(tokensOn(bob)).toHaveCount(1);
+
+  await master.getByRole('button', { name: 'Удалить игрока Алиса' }).click();
+  await master.getByRole('button', { name: 'Да, удалить' }).click();
+  await expect(alice.getByText('Мастер удалил вас из этой сессии.')).toBeVisible();
+  await expect(tokensOn(bob)).toHaveCount(0);
+  await expect(tokensOn(master)).toHaveCount(0);
+  const names = (page: Page) => page.locator('.participants .name');
+  await expect(names(master)).toHaveText(['Мастер (вы)', 'Боб']);
+  await expect(names(bob)).toHaveText(['Мастер', 'Боб (вы)']);
+
+  // Players have no such button; and the removed player's key is gone: the link asks for a name.
+  await expect(bob.getByRole('button', { name: /Удалить игрока/ })).toHaveCount(0);
+  await alice.goto(inviteUrl);
+  await expect(alice.getByLabel('Ваше имя')).toBeVisible();
+});

@@ -296,6 +296,22 @@ button:disabled {
   gap: 0.5rem;
 }
 
+.participants button.small {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.participants .confirm {
+  display: flex;
+  gap: 0.25rem;
+}
+
+button.danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+}
+
 .participants li.offline {
   color: var(--muted);
 }

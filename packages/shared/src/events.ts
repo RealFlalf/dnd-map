@@ -31,13 +31,13 @@ import type {
   TokensPatch,
   TokenVisibility,
 } from './token';
-import type { JoinRequest, JoinResult, ParticipantView } from './session';
+import type { JoinRequest, JoinResult, ParticipantRemove, ParticipantView } from './session';
 
 /**
  * Socket.IO contract shared by the server and the web client.
  * Bump PROTOCOL_VERSION on any breaking change to these events.
  */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 export interface HelloPayload {
   protocolVersion: number;
@@ -63,6 +63,11 @@ export interface ServerToClientEvents {
   'token.dragging': (drag: TokenDragging) => void;
   /** Someone drew a temporary line. Not versioned, never stored; it goes away after `ttlMs`. */
   'line.drawn': (line: LineView) => void;
+  /**
+   * Sent to a player the master has removed. The connection stays open but no longer belongs to
+   * the session, and the stored key is worthless now.
+   */
+  'session.removed': () => void;
 }
 
 export interface ClientToServerEvents {
@@ -103,6 +108,11 @@ export interface ClientToServerEvents {
   'obstacle.move': (request: ObstacleMove, ack: (res: ObstacleResult) => void) => void;
   /** Master only: removes every obstacle of the map. */
   'obstacle.clear': (request: ObstacleClear, ack: (res: ObstacleRemoveResult) => void) => void;
+  /** Master only: removes a player and their characters; everybody gets a fresh snapshot. */
+  'participant.remove': (
+    request: ParticipantRemove,
+    ack: (res: ActionResult<{ version: number }>) => void,
+  ) => void;
   /** Anyone: a temporary line over the current map. The others receive `line.drawn`. */
   'line.draw': (request: LineDraw, ack: (res: LineResult) => void) => void;
   /** Intermediate position while dragging; fire and forget, send at most ~20 times per second. */

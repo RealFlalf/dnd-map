@@ -52,6 +52,10 @@ export interface ParticipantView {
   icon: string;
 }
 
+/** Master only: removes a player from the session, together with their characters. */
+export const participantRemoveSchema = z.object({ participantId: z.string().min(1).max(64) });
+export type ParticipantRemove = z.input<typeof participantRemoveSchema>;
+
 export type JoinError =
   | 'invalid_request'
   | 'session_not_found'

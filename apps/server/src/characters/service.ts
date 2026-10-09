@@ -60,5 +60,37 @@ export function createCharacterService(prisma: PrismaClient, storage: FileStorag
       }
       return { icon, change };
     },
+
+    /**
+     * Removes a player from the session. Their characters on every map go with them (cascade), the
+     * log keeps their entries without the link. Null if there is no such player in this session;
+     * the master cannot be removed.
+     */
+    async removePlayer(
+      sessionId: string,
+      actorId: string,
+      participantId: string,
+    ): Promise<{ version: number } | null> {
+      const removed = await prisma.$transaction(async (tx) => {
+        const player = await tx.participant.findFirst({
+          where: { id: participantId, sessionId, role: 'player' },
+        });
+        if (!player) return null;
+        await tx.participant.delete({ where: { id: player.id } });
+        const { version } = await bumpVersion(tx, sessionId);
+        await logEvent(tx, sessionId, actorId, 'participant.remove', {
+          participantId: player.id,
+          displayName: player.displayName,
+        });
+        return { version, icon: player.iconUrl };
+      });
+      if (!removed) return null;
+
+      // Their uploaded icon belonged to them alone; a failure here only leaves a stray file.
+      if (removed.icon?.startsWith(FILES_URL_PREFIX)) {
+        await storage.remove(removed.icon.slice(FILES_URL_PREFIX.length)).catch(() => undefined);
+      }
+      return { version: removed.version };
+    },
   };
 }
