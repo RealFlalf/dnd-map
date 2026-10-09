@@ -17,11 +17,13 @@ const matrix: Array<[string, Action, TokenSubject | undefined, boolean, boolean]
   ['move a monster', 'token.move', monster, true, false],
   ['delete a monster', 'token.delete', monster, true, false],
   ['hide / show a monster', 'token.setVisibility', monster, true, false],
-  ['place own character', 'token.create', ownCharacter, false, true],
-  ['move own character', 'token.move', ownCharacter, false, true],
-  ["move someone else's character", 'token.move', otherCharacter, false, false],
-  ['place a character for someone else', 'token.create', otherCharacter, false, false],
-  ["delete someone else's character", 'token.delete', otherCharacter, false, false],
+  // The master runs the table, so every character is also theirs to place, move and remove.
+  ["place a player's own character", 'token.create', ownCharacter, true, true],
+  ["move a player's own character", 'token.move', ownCharacter, true, true],
+  ["delete a player's own character", 'token.delete', ownCharacter, true, true],
+  ["move someone else's character", 'token.move', otherCharacter, true, false],
+  ['place a character for someone else', 'token.create', otherCharacter, true, false],
+  ["delete someone else's character", 'token.delete', otherCharacter, true, false],
   ['hide a character', 'token.setVisibility', ownCharacter, false, false],
   ['choose a character icon', 'character.setIcon', undefined, false, true],
 ];
@@ -40,8 +42,16 @@ describe('can()', () => {
     }
   });
 
-  it('does not let a player act on a character with the same owner id but a master role', () => {
-    const masterWithSameId: Actor = { participantId: 'p1', role: 'master' };
-    expect(can(masterWithSameId, 'token.move', ownCharacter)).toBe(false);
+  it('ties a player to their own character by participant id, not by anything the client sends', () => {
+    const impostor: Actor = { participantId: 'p3', role: 'player' };
+    for (const action of ['token.create', 'token.move', 'token.delete'] as const) {
+      expect(can(impostor, action, ownCharacter)).toBe(false);
+      expect(can(impostor, action, monster)).toBe(false);
+    }
+  });
+
+  it('never lets anybody hide or show a character: characters are always visible', () => {
+    expect(can(master, 'token.setVisibility', ownCharacter)).toBe(false);
+    expect(can(master, 'token.setVisibility', otherCharacter)).toBe(false);
   });
 });

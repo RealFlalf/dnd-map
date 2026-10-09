@@ -51,10 +51,26 @@ export interface PlacementSpec {
   visible: boolean;
 }
 
+/** The master is placing the character of this player. */
+export interface PlayerPlacement {
+  forPlayer: string;
+  name: string;
+}
+
+/** What a click on the map places right now. */
+export type Placing = PlacementSpec | 'character' | PlayerPlacement;
+
+export const isPlayerPlacement = (placing: Placing | null): placing is PlayerPlacement =>
+  typeof placing === 'object' && placing !== null && 'forPlayer' in placing;
+
+/** The monster being placed, if that is what is being placed. */
+export const monsterPlacing = (placing: Placing | null): PlacementSpec | null =>
+  typeof placing === 'object' && placing !== null && 'icon' in placing ? placing : null;
+
 export interface TokenActions {
   create(spec: PlacementSpec, x: number, y: number): Promise<ActionResult>;
-  /** Player: puts their own character on the current map. */
-  placeCharacter(x: number, y: number): Promise<ActionResult>;
+  /** Puts a character on the current map: the player's own, or (master) the given player's. */
+  placeCharacter(x: number, y: number, participantId?: string): Promise<ActionResult>;
   /** Shows the token at its snapped position at once; the server's answer confirms or reverts it. */
   move(tokenId: string, x: number, y: number): void;
   /** Live position while dragging (throttled); other participants see the token follow. */
@@ -108,6 +124,11 @@ export function useSession(rawInviteCode: string) {
     pending: GridPatch | null;
     timer: ReturnType<typeof setTimeout> | null;
   }>({ mapId: '', pending: null, timer: null });
+  /** Who I am (set on join); used to recognise changes to my own character made by someone else. */
+  const selfId = useRef<string | null>(null);
+  const [characterNotice, setCharacterNotice] = useState<{ text: string; nonce: number } | null>(
+    null,
+  );
   const dragTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const lastDragSent = useRef(0);
 
@@ -158,6 +179,7 @@ export function useSession(rawInviteCode: string) {
       if (result.participantKey) saveParticipantKey(result.inviteCode, result.participantKey);
       const key = result.participantKey ?? ('key' in req ? req.key : undefined);
       if (key) request.current = { inviteCode: result.inviteCode, key };
+      selfId.current = result.self.id;
       worldRef.current = result.state;
       forgetRemoteDrags();
       setState({
@@ -190,6 +212,25 @@ export function useSession(rawInviteCode: string) {
     let cancelled = false;
     const queue = gridQueue.current;
     const timers = dragTimers.current;
+    /** Tells a player when somebody else (the master) moved, placed or removed their character. */
+    const announceChangesToMyCharacter = (before: TokenView[], patch: TokensPatch) => {
+      const me = selfId.current;
+      // My own changes are never sent back to me (the server skips the sender), so anything that
+      // arrives here about my character was done by somebody else.
+      if (!me) return;
+      const isMine = (t: TokenView) => t.type === 'player_character' && t.ownerParticipantId === me;
+      const mine = before.find(isMine);
+      const now = patch.upserted.find(isMine);
+      let text: string | null = null;
+      if (mine && now && (mine.x !== now.x || mine.y !== now.y)) {
+        text = 'Мастер переместил вашего персонажа';
+      } else if (!mine && now) {
+        text = 'Мастер поставил вашего персонажа на карту';
+      } else if (mine && patch.removedIds.includes(mine.id)) {
+        text = 'Мастер убрал вашего персонажа с карты';
+      }
+      if (text) setCharacterNotice({ text, nonce: Date.now() });
+    };
     const onConnect = () => {
       clearTimeout(reconnectTimer.current);
       void sendJoin();
@@ -233,6 +274,7 @@ export function useSession(rawInviteCode: string) {
       const world = worldRef.current;
       if (!world || patch.version <= world.version) return;
       if (patch.version > world.version + 1) return void resync();
+      announceChangesToMyCharacter(world.tokens, patch);
       applyWorld({
         ...world,
         version: patch.version,
@@ -423,14 +465,17 @@ export function useSession(rawInviteCode: string) {
         }
       },
 
-      async placeCharacter(x, y) {
+      async placeCharacter(x, y, participantId) {
         if (!socket.connected) return { ok: false, error: 'offline' };
         const world = worldRef.current;
         if (!world?.currentMapId) return { ok: false, error: 'map_not_found' };
         try {
-          const res = await socket
-            .timeout(5000)
-            .emitWithAck('character.place', { mapId: world.currentMapId, x, y });
+          const res = await socket.timeout(5000).emitWithAck('character.place', {
+            mapId: world.currentMapId,
+            x,
+            y,
+            ...(participantId && { participantId }),
+          });
           if (res.ok) confirm(res.version, replace(res.token));
           return res;
         } catch {
@@ -518,5 +563,6 @@ export function useSession(rawInviteCode: string) {
     tokenActions,
     characterActions,
     remoteDrags,
+    characterNotice,
   };
 }

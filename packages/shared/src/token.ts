@@ -137,7 +137,13 @@ export const characterIconSchema = z.object({
 });
 export type CharacterIconRequest = z.input<typeof characterIconSchema>;
 
-export const characterPlaceSchema = z.object({ mapId: id, x: coordinate, y: coordinate });
+export const characterPlaceSchema = z.object({
+  mapId: id,
+  x: coordinate,
+  y: coordinate,
+  /** Master only: puts this player's character on the map. Players always place their own. */
+  participantId: id.optional(),
+});
 export type CharacterPlace = z.input<typeof characterPlaceSchema>;
 
 /** The icon now stored for the character (`builtin:<id>` or a file URL). */

@@ -343,9 +343,13 @@ describe('character.place', () => {
     expect(await place(ctx.alice.socket, ctx.mapId)).toMatchObject({ ok: true });
   });
 
-  it('is refused for the master, and for requests that make no sense', async () => {
+  it('is refused for requests that make no sense', async () => {
     const ctx = await setup();
-    expect(await place(ctx.master.socket, ctx.mapId)).toEqual({ ok: false, error: 'forbidden' });
+    // The master has no character of their own: they have to say whose character to place.
+    expect(await place(ctx.master.socket, ctx.mapId)).toEqual({
+      ok: false,
+      error: 'invalid_request',
+    });
     expect(
       await emitAck(ctx.alice.socket, 'character.place', { mapId: ctx.mapId, x: 'a', y: 1 }),
     ).toEqual({
@@ -359,6 +363,140 @@ describe('character.place', () => {
     const lonely = await server.client();
     expect(await place(lonely, ctx.mapId)).toEqual({ ok: false, error: 'not_joined' });
     expect(await db.prisma.token.count()).toBe(0);
+  });
+
+  describe('placed by the master', () => {
+    const placeFor = (ctx: Ctx, participantId: string, x = 100, y = 100) =>
+      emitAck<Ok | Failed>(ctx.master.socket, 'character.place', {
+        mapId: ctx.mapId,
+        participantId,
+        x,
+        y,
+      });
+
+    it("puts a player's character on the map in their name and tells everyone", async () => {
+      const ctx = await setup();
+      await emitAck(ctx.bob.socket, 'character.setIcon', { icon: 'ranger' });
+      const seen = waitFor(ctx.alice.socket, 'tokens.changed');
+
+      const res = await placeFor(ctx, ctx.bob.id, 300, 200);
+
+      expect(res).toMatchObject({
+        ok: true,
+        token: {
+          type: 'player_character',
+          ownerParticipantId: ctx.bob.id,
+          name: 'Боб',
+          icon: 'builtin:ranger',
+          x: 315,
+          y: 175,
+        },
+      });
+      expect((await seen).upserted[0]).toMatchObject({ name: 'Боб' });
+      // ...and the player owns it from then on
+      const bobMoves = await emitAck<Ok>(ctx.bob.socket, 'token.move', {
+        tokenId: (res as Ok).token.id,
+        x: 500,
+        y: 100,
+      });
+      expect(bobMoves.ok).toBe(true);
+    });
+
+    it('keeps the rule of one character per player and map', async () => {
+      const ctx = await setup();
+      await placeOk(ctx.bob.socket, ctx.mapId);
+      expect(await placeFor(ctx, ctx.bob.id)).toEqual({ ok: false, error: 'already_placed' });
+      expect((await placeFor(ctx, ctx.alice.id)).ok).toBe(true);
+      expect(await placeFor(ctx, ctx.alice.id)).toEqual({ ok: false, error: 'already_placed' });
+    });
+
+    it('rejects people who are not players of this session, and the master as a target', async () => {
+      const ctx = await setup();
+      const other = await setup();
+      const refused = { ok: false, error: 'participant_not_found' };
+      expect(await placeFor(ctx, ctx.master.id)).toEqual(refused);
+      expect(await placeFor(ctx, other.alice.id)).toEqual(refused);
+      expect(await placeFor(ctx, 'no-such-participant')).toEqual(refused);
+      expect(await db.prisma.token.count({ where: { type: 'player_character' } })).toBe(0);
+    });
+
+    it('is not possible for a player, whatever participantId they send', async () => {
+      const ctx = await setup();
+      const res = await emitAck(ctx.alice.socket, 'character.place', {
+        mapId: ctx.mapId,
+        participantId: ctx.bob.id,
+        x: 1,
+        y: 1,
+      });
+      expect(res).toEqual({ ok: false, error: 'forbidden' });
+      // naming themselves is the same as naming nobody
+      const self = await emitAck<Ok>(ctx.alice.socket, 'character.place', {
+        mapId: ctx.mapId,
+        participantId: ctx.alice.id,
+        x: 1,
+        y: 1,
+      });
+      expect(self.ok).toBe(true);
+      expect(await db.prisma.token.count()).toBe(1);
+    });
+
+    it('writes the master as the actor in the audit log', async () => {
+      const ctx = await setup();
+      const token = ((await placeFor(ctx, ctx.alice.id)) as Ok).token;
+      await emitAck(ctx.master.socket, 'token.move', { tokenId: token.id, x: 300, y: 200 });
+      await emitAck(ctx.master.socket, 'token.delete', { tokenId: token.id });
+
+      const log = await db.prisma.eventLog.findMany({
+        where: { type: { in: ['token.create', 'token.move', 'token.delete'] } },
+        orderBy: { id: 'asc' },
+      });
+
+      expect(log.map((e) => [e.type, e.participantId])).toEqual([
+        ['token.create', ctx.master.id],
+        ['token.move', ctx.master.id],
+        ['token.delete', ctx.master.id],
+      ]);
+      expect(log[0]!.payload).toMatchObject({ owner: ctx.alice.id });
+    });
+  });
+
+  describe('moved and removed by the master', () => {
+    it('shows the move to the player at once and lets them carry on from the new place', async () => {
+      const ctx = await setup();
+      const token = await placeOk(ctx.alice.socket, ctx.mapId, 100, 100);
+      const seen = waitFor(ctx.alice.socket, 'tokens.changed', (p) => p.upserted.length > 0);
+
+      const res = await emitAck<Ok>(ctx.master.socket, 'token.move', {
+        tokenId: token.id,
+        x: 600,
+        y: 300,
+      });
+
+      expect(res.token).toMatchObject({ x: 595, y: 315 });
+      expect((await seen).upserted[0]).toMatchObject({ id: token.id, x: 595, y: 315 });
+      const back = await emitAck<Ok>(ctx.alice.socket, 'token.move', {
+        tokenId: token.id,
+        x: 100,
+        y: 100,
+      });
+      expect(back.token).toMatchObject({ x: 105, y: 105 });
+    });
+
+    it('removes a character that stayed behind after its player left, and the player can come back', async () => {
+      const ctx = await setup();
+      const token = await placeOk(ctx.bob.socket, ctx.mapId);
+      ctx.bob.socket.disconnect();
+      const gone = waitFor(ctx.alice.socket, 'tokens.changed', (p) => p.removedIds.length > 0);
+
+      expect(await emitAck(ctx.master.socket, 'token.delete', { tokenId: token.id })).toMatchObject(
+        { ok: true },
+      );
+
+      expect((await gone).removedIds).toEqual([token.id]);
+      const back = await server.client();
+      await joinOk(back, { inviteCode: ctx.inviteCode, key: ctx.bob.key });
+      expect(await place(back, ctx.mapId)).toMatchObject({ ok: true });
+    });
   });
 
   it('only works on the current map', async () => {
@@ -409,8 +547,9 @@ describe('access matrix', () => {
   const actors: Actor[] = ['master', 'alice', 'bob'];
   const targets: Target[] = ['monster', 'aliceChar', 'bobChar'];
 
+  // The master runs the table; a player controls their own character and nothing else.
   const allowedMoveOrDelete = (actor: Actor, target: Target) =>
-    (actor === 'master' && target === 'monster') ||
+    actor === 'master' ||
     (actor === 'alice' && target === 'aliceChar') ||
     (actor === 'bob' && target === 'bobChar');
   const allowedVisibility = (actor: Actor, target: Target) =>
@@ -460,7 +599,8 @@ describe('access matrix', () => {
       }
     }
 
-    expect(refused).toBe(6 * 2 + 8); // 6 forbidden pairs for move+delete, 8 for visibility
+    // 4 forbidden pairs for move+delete (each player on the monster and on the other player), 8 for visibility
+    expect(refused).toBe(4 * 2 + 8);
     expect(await db.prisma.token.findMany({ orderBy: { id: 'asc' } })).toEqual(before);
     expect(
       await db.prisma.eventLog.count({
@@ -533,10 +673,11 @@ describe('access matrix', () => {
       [
         ...traffic[observer].since(marks[observer]).matchAll(/token\.dragging \[(\{[^\]]*\})\]/g),
       ].map((m) => (JSON.parse(m[1]!) as { tokenId: string; x: number }).x);
-    // Allowed drags: master->monster (0), alice->aliceChar (11), bob->bobChar (22).
+    // Allowed drags: master->monster (0), master->aliceChar (1), master->bobChar (2),
+    // alice->aliceChar (11), bob->bobChar (22).
     expect(received('master').sort((a, b) => a - b)).toEqual([11, 22]);
-    expect(received('alice').sort((a, b) => a - b)).toEqual([0, 22]);
-    expect(received('bob').sort((a, b) => a - b)).toEqual([0, 11]);
+    expect(received('alice').sort((a, b) => a - b)).toEqual([0, 1, 2, 22]);
+    expect(received('bob').sort((a, b) => a - b)).toEqual([0, 1, 2, 11]);
   });
 
   it('does not let a player create monsters or change the grid and maps', async () => {

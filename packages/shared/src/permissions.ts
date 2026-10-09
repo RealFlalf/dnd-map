@@ -42,8 +42,9 @@ export function can(actor: Actor, action: Action, token?: TokenSubject): boolean
     case 'token.move':
     case 'token.delete':
       if (!token) return false;
-      if (token.type === 'monster') return actor.role === 'master';
-      // A player character belongs to exactly one player; nobody else may touch it, the master included.
-      return actor.role === 'player' && token.ownerParticipantId === actor.participantId;
+      // The master runs the table: every token is theirs to place, move and remove.
+      if (actor.role === 'master') return true;
+      // A player controls their own character only; monsters and other players' characters are off limits.
+      return token.type === 'player_character' && token.ownerParticipantId === actor.participantId;
   }
 }

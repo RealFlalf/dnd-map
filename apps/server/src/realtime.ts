@@ -199,14 +199,20 @@ export function registerRealtime(
   const placeCharacter = async (socket: IoSocket, request: unknown): Promise<TokenResult> => {
     const joined = socket.data.session;
     if (!joined) return { ok: false, error: 'not_joined' };
-    const mine = { type: 'player_character', ownerParticipantId: joined.participantId } as const;
-    if (!can(actorOf(joined), 'token.create', mine)) return { ok: false, error: 'forbidden' };
     const parsed = characterPlaceSchema.safeParse(request);
     if (!parsed.success) return { ok: false, error: 'invalid_request' };
+    // A player places their own character; the master must say whose.
+    const ownerId = parsed.data.participantId ?? joined.participantId;
+    if (joined.role === 'master' && !parsed.data.participantId) {
+      return { ok: false, error: 'invalid_request' };
+    }
+    const target = { type: 'player_character', ownerParticipantId: ownerId } as const;
+    if (!can(actorOf(joined), 'token.create', target)) return { ok: false, error: 'forbidden' };
 
     const outcome = await tokens.placeCharacter(
       joined.sessionId,
       joined.participantId,
+      ownerId,
       parsed.data,
     );
     return tokenResult(socket, joined.sessionId, outcome);

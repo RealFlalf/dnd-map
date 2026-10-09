@@ -6,7 +6,8 @@ import {
   type TokenView,
 } from '@dnd-map/shared';
 import { useState, type DragEvent, type KeyboardEvent } from 'react';
-import type { PlacementSpec, TokenActions } from '../session/useSession';
+import type { ParticipantView } from '@dnd-map/shared';
+import type { PlacementSpec, PlayerPlacement, TokenActions } from '../session/useSession';
 import { PALETTE_MIME, serializePlacement } from './placement';
 import { TokenIcon } from './TokenIcon';
 
@@ -141,35 +142,78 @@ export function TokenList({
                     {col}, {row}
                   </span>
                 </button>
-                {/* Characters belong to their players: the master can neither hide nor remove them. */}
+                {/* Characters are always visible to everyone; only monsters can be hidden. */}
                 {token.type === 'monster' && (
-                  <>
-                    <button
-                      type="button"
-                      className="icon-button"
-                      aria-label={
-                        token.visible ? `Скрыть: ${token.name}` : `Показать: ${token.name}`
-                      }
-                      title={token.visible ? 'Скрыть от игроков' : 'Показать игрокам'}
-                      onClick={() => actions.setVisible(token.id, !token.visible)}
-                    >
-                      {token.visible ? '👁' : '🚫'}
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-button"
-                      aria-label={`Удалить: ${token.name}`}
-                      onClick={() => actions.remove(token.id)}
-                    >
-                      ×
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={token.visible ? `Скрыть: ${token.name}` : `Показать: ${token.name}`}
+                    title={token.visible ? 'Скрыть от игроков' : 'Показать игрокам'}
+                    onClick={() => actions.setVisible(token.id, !token.visible)}
+                  >
+                    {token.visible ? '👁' : '🚫'}
+                  </button>
                 )}
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Удалить: ${token.name}`}
+                  title={token.type === 'monster' ? 'Удалить' : 'Снять персонажа с карты'}
+                  onClick={() => actions.remove(token.id)}
+                >
+                  ×
+                </button>
               </li>
             );
           })}
         </ul>
       )}
+    </section>
+  );
+}
+
+/** Master: players who have no character on this map yet, to be put there on their behalf. */
+export function PlayersToPlace({
+  players,
+  placing,
+  onPlacingChange,
+}: {
+  players: ParticipantView[];
+  placing: PlayerPlacement | null;
+  onPlacingChange(placement: PlayerPlacement | null): void;
+}) {
+  if (players.length === 0) return null;
+  return (
+    <section className="panel">
+      <h3>Игроки без персонажа</h3>
+      <ul className="token-list">
+        {players.map((p) => {
+          const active = placing?.forPlayer === p.id;
+          return (
+            <li key={p.id}>
+              <span className="token-pick static">
+                <TokenIcon icon={p.icon} size={28} />
+                <span className="token-name">{p.displayName}</span>
+                <span
+                  className={p.online ? 'dot on' : 'dot'}
+                  aria-label={p.online ? 'онлайн' : 'офлайн'}
+                />
+              </span>
+              <button
+                type="button"
+                className={active ? '' : 'secondary'}
+                aria-pressed={active}
+                onClick={() =>
+                  onPlacingChange(active ? null : { forPlayer: p.id, name: p.displayName })
+                }
+              >
+                {active ? 'Отмена' : 'Поставить'}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="hint">Нажмите «Поставить» и затем на карту.</p>
     </section>
   );
 }

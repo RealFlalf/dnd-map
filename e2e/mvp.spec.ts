@@ -94,20 +94,61 @@ test('UC-2: a player joins by link and controls only their own character', async
   await dragOnMap(alice, cell(4, 5), cell(8, 7));
   await expect(tokensOn(master).filter({ hasText: 'Алиса' })).toHaveText('Алиса, клетка 8, 7');
 
-  // somebody else's tokens: nothing happens, for her or for anyone
+  // the master's monster is not hers to move
   await dragOnMap(alice, cell(10, 3), cell(15, 8));
-  await dragOnMap(master, cell(8, 7), cell(2, 2));
   await alice.waitForTimeout(500);
   await expect(tokensOn(master).filter({ hasText: 'Гоблин' })).toHaveText('Гоблин 1, клетка 10, 3');
-  await expect(tokensOn(alice).filter({ hasText: 'Алиса' })).toHaveText('Алиса, клетка 8, 7');
+
+  // the master may move her character, and she is told about it
+  await dragOnMap(master, cell(8, 7), cell(2, 2));
+  await expect(tokensOn(alice).filter({ hasText: 'Алиса' })).toHaveText('Алиса, клетка 2, 2');
+  await expect(alice.getByText('Мастер переместил вашего персонажа')).toBeVisible();
 
   // a reload brings her back as herself, still owning the character
   await alice.reload();
   await waitForMap(alice);
   await expect(alice.getByRole('button', { name: 'Убрать с карты' })).toBeVisible();
-  await dragOnMap(alice, cell(8, 7), cell(9, 7));
-  await expect(tokensOn(master).filter({ hasText: 'Алиса' })).toHaveText('Алиса, клетка 9, 7');
+  await dragOnMap(alice, cell(2, 2), cell(3, 2));
+  await expect(tokensOn(master).filter({ hasText: 'Алиса' })).toHaveText('Алиса, клетка 3, 2');
   await expect(master.locator('.participants li')).toHaveCount(2);
+});
+
+test('the master puts players on the map, moves and removes them', async ({
+  page: master,
+  browser,
+}) => {
+  const inviteUrl = await createSessionAsMaster(master);
+  await uploadMap(master, 'dungeon.png');
+  const alice = await joinAsPlayer(browser, inviteUrl, 'Алиса');
+  const bob = await joinAsPlayer(browser, inviteUrl, 'Боб');
+  await waitForMap(alice);
+  await waitForMap(bob);
+
+  // both players are waiting for the master to place them
+  const waiting = master.locator('.panel', { hasText: 'Игроки без персонажа' });
+  await expect(waiting.locator('li')).toHaveCount(2);
+  await waiting
+    .locator('li', { hasText: 'Боб' })
+    .getByRole('button', { name: 'Поставить' })
+    .click();
+  await expect(master.getByText('поставить персонажа «Боб»')).toBeVisible();
+  await clickMap(master, cell(6, 4));
+
+  await expect(tokensOn(bob)).toHaveText(['Боб, клетка 6, 4']);
+  await expect(bob.getByText('Мастер поставил вашего персонажа на карту')).toBeVisible();
+  await expect(waiting.locator('li')).toHaveCount(1); // only Алиса is left
+  await expect(master.getByText('поставить персонажа')).toHaveCount(0); // placing mode ended
+
+  // Боб carries on by himself from where the master put him
+  await dragOnMap(bob, cell(6, 4), cell(7, 4));
+  await expect(tokensOn(master)).toHaveText(['Боб, клетка 7, 4']);
+
+  // the master takes him off the map again; he is waiting once more
+  await master.getByRole('button', { name: 'Удалить: Боб' }).click();
+  await expect(tokensOn(alice)).toHaveCount(0);
+  await expect(bob.getByText('Мастер убрал вашего персонажа с карты')).toBeVisible();
+  await expect(bob.getByRole('button', { name: 'Поставить на карту' })).toBeVisible();
+  await expect(waiting.locator('li')).toHaveCount(2);
 });
 
 test('UC-3: the master runs a fight and the players see it; hidden monsters stay hidden', async ({

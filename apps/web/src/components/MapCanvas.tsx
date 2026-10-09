@@ -2,7 +2,7 @@ import { GRID_SCALE_MAX, GRID_SCALE_MIN, type MapView, type TokenView } from '@d
 import type Konva from 'konva';
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { Image as KonvaImage, Layer, Rect, Shape, Stage } from 'react-konva';
-import type { PlacementSpec, RemoteDrags } from '../session/useSession';
+import { isPlayerPlacement, type Placing, type RemoteDrags } from '../session/useSession';
 import { PALETTE_MIME, parsePlacement } from './placement';
 import { TokenLayer } from './TokenLayer';
 import { useElementSize } from './useElementSize';
@@ -40,8 +40,8 @@ interface Props {
   map: MapView;
   tokens: TokensProps;
   /** While set, a click on the map places a token instead of selecting: a monster, or the player's own character. */
-  placing: PlacementSpec | 'character' | null;
-  onPlace(spec: PlacementSpec | 'character', x: number, y: number): void;
+  placing: Placing | null;
+  onPlace(spec: Placing, x: number, y: number): void;
   /** Centre the view on this point; a new object (new `nonce`) is a new request. */
   focus: { x: number; y: number; nonce: number } | null;
   /** While true, dragging draws a rectangle instead of panning; the rectangle becomes one grid cell. */
@@ -359,7 +359,9 @@ export function MapCanvas({
         <div className="map-hint">
           {placing === 'character'
             ? 'Нажмите на карту, чтобы поставить своего персонажа · Esc — отмена'
-            : 'Нажмите на карту, чтобы поставить фишку · Esc — закончить'}
+            : isPlayerPlacement(placing)
+              ? `Нажмите на карту, чтобы поставить персонажа «${placing.name}» · Esc — отмена`
+              : 'Нажмите на карту, чтобы поставить фишку · Esc — закончить'}
         </div>
       )}
 

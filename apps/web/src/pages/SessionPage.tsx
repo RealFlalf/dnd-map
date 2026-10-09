@@ -5,12 +5,14 @@ import { MapCanvas } from '../components/MapCanvas';
 import { MapControls } from '../components/MapControls';
 import { ParticipantList } from '../components/ParticipantList';
 import { CharacterPanel } from '../components/CharacterPanel';
-import { MonsterPalette, TokenList } from '../components/TokenPanels';
+import { MonsterPalette, PlayersToPlace, TokenList } from '../components/TokenPanels';
 import {
   useSession,
   type CharacterActions,
   type MapActions,
-  type PlacementSpec,
+  isPlayerPlacement,
+  monsterPlacing,
+  type Placing,
   type RemoteDrags,
   type SessionState,
   type TokenActions,
@@ -29,8 +31,16 @@ const errorText: Record<JoinError | 'network', string> = {
 
 export function SessionPage() {
   const { inviteCode = '' } = useParams();
-  const { state, outdated, joinAsPlayer, mapActions, tokenActions, characterActions, remoteDrags } =
-    useSession(inviteCode);
+  const {
+    state,
+    outdated,
+    joinAsPlayer,
+    mapActions,
+    tokenActions,
+    characterActions,
+    remoteDrags,
+    characterNotice,
+  } = useSession(inviteCode);
 
   switch (state.status) {
     case 'loading':
@@ -73,6 +83,7 @@ export function SessionPage() {
           characterActions={characterActions}
           remoteDrags={remoteDrags}
           outdated={outdated}
+          characterNotice={characterNotice}
         />
       );
   }
@@ -84,6 +95,7 @@ const placeErrors: Record<string, string> = {
   too_many_tokens: 'На карте уже максимум фишек. Удалите ненужные.',
   map_not_found: 'Сначала загрузите карту.',
   forbidden: 'Фишки мобов может ставить только Мастер.',
+  participant_not_found: 'Такого игрока в сессии нет.',
   already_placed: 'Ваш персонаж уже стоит на этой карте.',
   offline: 'Нет связи с сервером — действие не выполнено.',
   rate_limited: 'Слишком быстро. Подождите секунду.',
@@ -96,8 +108,10 @@ function JoinedView({
   characterActions,
   remoteDrags,
   outdated,
+  characterNotice,
 }: {
   outdated: boolean;
+  characterNotice: { text: string; nonce: number } | null;
   state: Joined;
   actions: MapActions;
   tokenActions: TokenActions;
@@ -105,7 +119,7 @@ function JoinedView({
   remoteDrags: RemoteDrags;
 }) {
   const [calibrating, setCalibrating] = useState(false);
-  const [placing, setPlacing] = useState<PlacementSpec | 'character' | null>(null);
+  const [placing, setPlacing] = useState<Placing | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ x: number; y: number; nonce: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -118,6 +132,11 @@ function JoinedView({
   const myCharacter =
     world.tokens.find((t) => t.type === 'player_character' && t.ownerParticipantId === self.id) ??
     null;
+  const playersWithoutCharacter = state.participants.filter(
+    (p) =>
+      p.role === 'player' &&
+      !world.tokens.some((t) => t.type === 'player_character' && t.ownerParticipantId === p.id),
+  );
   // A selection of a token that is gone (deleted, hidden, other map) simply stops applying.
   const selected = world.tokens.find((t) => t.id === selectedId) ?? null;
 
@@ -142,14 +161,16 @@ function JoinedView({
   );
 
   const place = useCallback(
-    async (spec: PlacementSpec | 'character', x: number, y: number) => {
+    async (spec: Placing, x: number, y: number) => {
       const res =
         spec === 'character'
           ? await tokenActions.placeCharacter(x, y)
-          : await tokenActions.create(spec, x, y);
+          : isPlayerPlacement(spec)
+            ? await tokenActions.placeCharacter(x, y, spec.forPlayer)
+            : await tokenActions.create(spec, x, y);
       if (!res.ok) setNotice(placeErrors[res.error] ?? 'Не удалось поставить фишку.');
       // A character is placed once; monsters can be placed repeatedly while the mode stays on.
-      else if (spec === 'character') setPlacing(null);
+      else if (spec === 'character' || isPlayerPlacement(spec)) setPlacing(null);
     },
     [tokenActions],
   );
@@ -168,6 +189,15 @@ function JoinedView({
       setCalibrating(false);
     }
   }, [offline]);
+
+  // Something the master did to my character: tell me, so that it does not look like a glitch.
+  const [info, setInfo] = useState<string | null>(null);
+  useEffect(() => {
+    if (!characterNotice) return;
+    setInfo(characterNotice.text);
+    const timer = setTimeout(() => setInfo(null), 5000);
+    return () => clearTimeout(timer);
+  }, [characterNotice]);
 
   useEffect(() => {
     if (!notice) return;
@@ -265,6 +295,11 @@ function JoinedView({
               Нет связи — переподключаемся…
             </div>
           )}
+          {info && !notice && (
+            <div className="toast info" role="status">
+              {info}
+            </div>
+          )}
           {notice && (
             <div className="toast" role="status">
               {notice}
@@ -308,8 +343,10 @@ function JoinedView({
           )}
           {isMaster && currentMap && (
             <>
-              <MonsterPalette
-                placing={placing === 'character' ? null : placing}
+              <MonsterPalette placing={monsterPlacing(placing)} onPlacingChange={setPlacing} />
+              <PlayersToPlace
+                players={playersWithoutCharacter}
+                placing={isPlayerPlacement(placing) ? placing : null}
                 onPlacingChange={setPlacing}
               />
               <TokenList

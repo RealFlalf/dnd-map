@@ -15,7 +15,12 @@ import type { TokenChange } from './patch';
 import { toTokenView } from './view';
 
 type Failure =
-  'token_not_found' | 'map_not_found' | 'forbidden' | 'too_many_tokens' | 'already_placed';
+  | 'token_not_found'
+  | 'participant_not_found'
+  | 'map_not_found'
+  | 'forbidden'
+  | 'too_many_tokens'
+  | 'already_placed';
 export type TokenOutcome = { ok: true; change: TokenChange } | { ok: false; error: Failure };
 
 /** Decides inside the transaction whether the actor may touch the token (it is loaded fresh). */
@@ -112,10 +117,14 @@ export function createTokenService(prisma: PrismaClient) {
       });
     },
 
-    /** Puts a player's own character on the current map; every player has at most one per map. */
+    /**
+     * Puts `ownerId`'s character on the current map; every player has at most one per map.
+     * `actorId` is who asked (the player themselves or the master) and goes to the audit log.
+     */
     async placeCharacter(
       sessionId: string,
-      participantId: string,
+      actorId: string,
+      ownerId: string,
       req: CharacterPlace,
     ): Promise<TokenOutcome> {
       // The check below gives the usual answer; the unique index on (map, owner) is what actually
@@ -128,16 +137,16 @@ export function createTokenService(prisma: PrismaClient) {
           });
           if (session.currentMapId !== req.mapId) return fail('map_not_found');
           const map = await tx.map.findUniqueOrThrow({ where: { id: req.mapId } });
-          const player = await tx.participant.findFirstOrThrow({
-            where: { id: participantId, sessionId },
+          const player = await tx.participant.findFirst({
+            where: { id: ownerId, sessionId, role: 'player' },
           });
+          if (!player) return fail('participant_not_found');
 
           const onMap = await tx.token.findMany({
             where: { mapId: map.id },
             select: { ownerParticipantId: true },
           });
-          if (onMap.some((t) => t.ownerParticipantId === participantId))
-            return fail('already_placed');
+          if (onMap.some((t) => t.ownerParticipantId === ownerId)) return fail('already_placed');
           if (onMap.length >= MAX_TOKENS_PER_MAP) return fail('too_many_tokens');
 
           const at = placeToken(mapBox(map), 1, { x: req.x, y: req.y });
@@ -145,7 +154,7 @@ export function createTokenService(prisma: PrismaClient) {
             data: {
               mapId: map.id,
               type: 'player_character',
-              ownerParticipantId: participantId,
+              ownerParticipantId: ownerId,
               name: player.displayName,
               iconUrl: player.iconUrl ?? defaultCharacterIcon(player.id),
               x: at.x,
@@ -155,10 +164,11 @@ export function createTokenService(prisma: PrismaClient) {
             },
           });
           const { version } = await bumpVersion(tx, sessionId);
-          await logEvent(tx, sessionId, participantId, 'token.create', {
+          await logEvent(tx, sessionId, actorId, 'token.create', {
             tokenId: row.id,
             name: row.name,
             type: 'player_character',
+            owner: ownerId,
             at: { x: at.x, y: at.y },
           });
           return changeOf(version, row, false);
