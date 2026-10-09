@@ -73,6 +73,7 @@ describe('map upload', () => {
       maps: [],
       tokens: [],
       obstacles: [],
+      fog: { enabled: false, radius: 6, polygons: [] },
     });
     const masterSees = waitFor(masterSocket, 'state.snapshot');
     const playerSees = waitFor(playerSocket, 'state.snapshot');

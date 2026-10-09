@@ -81,6 +81,11 @@ export interface ObstacleActions {
   clear(): Promise<ActionResult>;
 }
 
+export interface FogActions {
+  /** Changes the fog of the current map; shown at once, sent to the server at most every ~150 ms. */
+  update(change: { enabled?: boolean; radius?: number }): void;
+}
+
 export interface TokenActions {
   create(spec: PlacementSpec, x: number, y: number): Promise<ActionResult>;
   /** Puts a character on the current map: the player's own, or (master) the given player's. */
@@ -104,6 +109,7 @@ export interface CharacterActions {
 export type RemoteDrags = Readonly<Record<string, { x: number; y: number }>>;
 
 const GRID_SEND_INTERVAL_MS = 100;
+const FOG_SEND_INTERVAL_MS = 150;
 const DRAG_SEND_INTERVAL_MS = 50;
 /** A remote drag that goes quiet this long (e.g. the dragger lost connection) is forgotten. */
 const REMOTE_DRAG_TIMEOUT_MS = 2000;
@@ -671,6 +677,39 @@ export function useSession(rawInviteCode: string) {
     };
   }, [applyWorld, resync]);
 
+  const fogActions = useMemo<FogActions>(() => {
+    let pending: { enabled?: boolean; radius?: number } = {};
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const send = () => {
+      timer = null;
+      const world = worldRef.current;
+      const change = pending;
+      pending = {};
+      if (!world?.currentMapId || !socket.connected) return;
+      socket
+        .timeout(5000)
+        .emitWithAck('fog.update', { mapId: world.currentMapId, ...change })
+        .then((res) => {
+          if (!res.ok) void resync();
+        })
+        .catch(() => void resync());
+    };
+    return {
+      update(change) {
+        const world = worldRef.current;
+        if (!world?.currentMapId || !socket.connected) return;
+        // The polygons stay as they were until the server sends the new ones.
+        applyWorld({ ...world, fog: { ...world.fog, ...change } });
+        pending = { ...pending, ...change };
+        // A switch is sent at once; only the slider, which fires continuously, is throttled.
+        if (change.enabled !== undefined) {
+          if (timer) clearTimeout(timer);
+          send();
+        } else timer ??= setTimeout(send, FOG_SEND_INTERVAL_MS);
+      },
+    };
+  }, [applyWorld, resync]);
+
   const characterActions = useMemo<CharacterActions>(
     () => ({
       async setIcon(iconId) {
@@ -702,6 +741,7 @@ export function useSession(rawInviteCode: string) {
     remoteDrags,
     characterNotice,
     obstacleActions,
+    fogActions,
     actionNotice,
   };
 }

@@ -359,3 +359,82 @@ test('obstacles: the master builds walls, players cannot cross them, the master 
   await waitForMap(alice);
   await expect(obstaclesOn(alice)).toHaveCount(0);
 });
+
+test('fog of war: players see only as far as their characters, not through walls; the master sees everything', async ({
+  page: master,
+  browser,
+}) => {
+  const inviteUrl = await createSessionAsMaster(master);
+  await uploadMap(master, 'dungeon.png');
+  let aliceTraffic: string[] = [];
+  const alice = await joinAsPlayer(browser, inviteUrl, 'Алиса', {}, (page) => {
+    aliceTraffic = recordServerTraffic(page);
+  });
+  await waitForMap(alice);
+  await alice.getByRole('button', { name: 'Поставить на карту' }).click();
+  await clickMap(alice, cell(3, 5));
+  await expect(tokensOn(master)).toHaveText(['Алиса, клетка 3, 5']);
+
+  await placeMonster(master, 'Орк', cell(5, 5));
+  await placeMonster(master, 'Скелет', cell(15, 5));
+  await expect(tokensOn(alice)).toHaveCount(3);
+
+  // fog on, four cells of sight: the far skeleton disappears from the player's page and traffic
+  await master.getByLabel('Включить туман').check();
+  await master.getByRole('spinbutton', { name: 'Обзор, клеток' }).fill('4');
+  await master.getByRole('spinbutton', { name: 'Обзор, клеток' }).press('Enter');
+  await expect(tokensOn(alice)).toHaveText(['Алиса, клетка 3, 5', 'Орк 1, клетка 5, 5']);
+  await expect(tokensOn(master)).toHaveCount(3); // the master still sees all of it
+  const mark = aliceTraffic.length;
+  await dragOnMap(master, cell(15, 5), cell(16, 5));
+  await alice.waitForTimeout(400);
+  expect(aliceTraffic.slice(mark).join('\n')).not.toContain('Скелет');
+
+  // a wall between her and the orc hides it
+  await tool(master, 'Столб').click();
+  await clickMap(master, cell(4, 5));
+  await master.keyboard.press('Escape');
+  await expect(tokensOn(alice)).toHaveText(['Алиса, клетка 3, 5']);
+  await expect(obstaclesOn(alice)).toHaveText(['Столб, клетки 4 × 5']);
+
+  // "as players" shows the master the same thing
+  await master.getByLabel('Смотреть как игроки').check();
+  await expect(tokensOn(master)).toHaveText(['Алиса, клетка 3, 5']);
+  await master.getByLabel('Смотреть как игроки').uncheck();
+  await expect(tokensOn(master)).toHaveCount(3);
+
+  // fog off: everything is back
+  await master.getByLabel('Включить туман').uncheck();
+  await expect(tokensOn(alice)).toHaveCount(3);
+
+  // the settings survive a reload
+  await master.getByLabel('Включить туман').check();
+  await expect(tokensOn(alice)).toHaveText(['Алиса, клетка 3, 5']);
+  await master.reload();
+  await waitForMap(master);
+  await expect(master.getByLabel('Включить туман')).toBeChecked();
+  await expect(tokensOn(alice)).toHaveText(['Алиса, клетка 3, 5']);
+});
+
+test('master panels can be folded, and stay folded after a reload', async ({ page: master }) => {
+  await createSessionAsMaster(master);
+  await uploadMap(master, 'dungeon.png');
+  const fogToggle = master.getByLabel('Включить туман');
+  await expect(fogToggle).toBeVisible();
+
+  await master.getByRole('button', { name: 'Туман войны' }).click();
+  await expect(fogToggle).toBeHidden();
+  await expect(master.getByRole('button', { name: 'Препятствия' })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+
+  await master.reload();
+  await waitForMap(master);
+  await expect(master.getByRole('button', { name: 'Туман войны' })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  await master.getByRole('button', { name: 'Туман войны' }).click();
+  await expect(fogToggle).toBeVisible();
+});

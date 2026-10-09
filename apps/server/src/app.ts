@@ -16,6 +16,7 @@ import { registerSessionRoutes } from './sessions/routes';
 import { createSessionService } from './sessions/service';
 import { createObstacleService } from './obstacles/service';
 import { createTokenService } from './tokens/service';
+import { createVisionService } from './vision/service';
 
 export interface AppDeps {
   config: Config;
@@ -48,6 +49,7 @@ export async function buildApp({ config, db }: AppDeps) {
   const tokens = createTokenService(db.prisma);
   const characters = createCharacterService(db.prisma, storage);
   const obstacles = createObstacleService(db.prisma);
+  const vision = createVisionService(db.prisma);
   const rateLimit = config.RATE_LIMIT === 'on';
 
   if (rateLimit) {
@@ -111,6 +113,7 @@ export async function buildApp({ config, db }: AppDeps) {
     tokens,
     characters,
     obstacles,
+    vision,
     rateLimit,
     log: app.log,
   });

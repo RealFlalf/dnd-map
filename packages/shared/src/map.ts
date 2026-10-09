@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ObstacleView } from './obstacle';
+import type { FogState } from './vision';
 import type { TokenView } from './token';
 
 export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -40,6 +41,8 @@ export interface SessionState {
   tokens: TokenView[];
   /** Obstacles on the current map. */
   obstacles: ObstacleView[];
+  /** Fog of war of the current map; with fog on, a player's tokens and obstacles are limited to what is in view. */
+  fog: FogState;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));

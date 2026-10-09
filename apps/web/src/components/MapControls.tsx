@@ -1,3 +1,4 @@
+import { Panel } from './Panel';
 import {
   ACCEPTED_IMAGE_TYPES,
   GRID_SCALE_MAX,
@@ -62,8 +63,7 @@ function MapList({ world, actions }: { world: SessionState; actions: MapActions 
   };
 
   return (
-    <section className="panel">
-      <h3>Карты</h3>
+    <Panel id="maps" title={<>Карты</>}>
       <input
         ref={input}
         type="file"
@@ -108,7 +108,7 @@ function MapList({ world, actions }: { world: SessionState; actions: MapActions 
           ))}
         </ul>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -127,8 +127,7 @@ function GridSettings({
   const set = (patch: Parameters<MapActions['updateGrid']>[1]) => actions.updateGrid(map.id, patch);
 
   return (
-    <section className="panel">
-      <h3>Сетка</h3>
+    <Panel id="grid" title={<>Сетка</>}>
       <label className="check">
         <input
           type="checkbox"
@@ -180,14 +179,14 @@ function GridSettings({
           Растяните прямоугольник по одной клетке на карте — сетка подстроится.
         </p>
       )}
-    </section>
+    </Panel>
   );
 }
 
 const round = (value: number) => Math.round(value * 10) / 10;
 
 /** A slider for quick adjustment plus a number box for exact values (committed on Enter or blur). */
-function SliderField({
+export function SliderField({
   label,
   value,
   min,

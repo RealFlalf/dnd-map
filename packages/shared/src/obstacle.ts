@@ -108,7 +108,7 @@ export const tokenRadius = (grid: GridSettings, size: number) =>
   size * grid.scale * TOKEN_RADIUS_RATIO;
 
 /** Distance from a point to a rectangle (0 inside). */
-function pointRectDistance(p: Point, r: Rect): number {
+export function pointRectDistance(p: Point, r: Rect): number {
   const dx = Math.max(r.x - p.x, 0, p.x - (r.x + r.width));
   const dy = Math.max(r.y - p.y, 0, p.y - (r.y + r.height));
   return Math.hypot(dx, dy);

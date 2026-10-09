@@ -721,3 +721,26 @@ label.check {
 .map-canvas.drawing {
   cursor: crosshair;
 }
+
+.panel-body {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.panel-body[hidden] {
+  display: none;
+}
+
+.panel-toggle {
+  all: unset;
+  display: block;
+  width: 100%;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.panel-toggle:focus-visible {
+  outline: 2px solid var(--accent, #e08a52);
+  outline-offset: 2px;
+}

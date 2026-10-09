@@ -44,7 +44,13 @@ export function createCharacterService(prisma: PrismaClient, storage: FileStorag
         const { version } = await bumpVersion(tx, sessionId);
         return {
           previous: participant.iconUrl,
-          change: { version, token: toTokenView(shown), wasVisible: true, removed: false },
+          change: {
+            version,
+            token: toTokenView(shown),
+            previous: toTokenView(shown),
+            wasVisible: true,
+            removed: false,
+          },
         };
       });
 

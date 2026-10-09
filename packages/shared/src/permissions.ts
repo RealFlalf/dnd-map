@@ -10,7 +10,8 @@ export type Action =
   | 'token.delete'
   | 'token.setVisibility'
   | 'character.setIcon'
-  | 'obstacle.edit';
+  | 'obstacle.edit'
+  | 'fog.update';
 
 export interface Actor {
   participantId: string;
@@ -32,6 +33,7 @@ export function can(actor: Actor, action: Action, token?: TokenSubject): boolean
     case 'map.set':
     case 'grid.update':
     case 'obstacle.edit':
+    case 'fog.update':
       return actor.role === 'master';
 
     case 'character.setIcon':

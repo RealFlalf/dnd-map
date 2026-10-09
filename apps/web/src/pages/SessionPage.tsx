@@ -3,14 +3,16 @@ import {
   cellOf,
   describeCells,
   displayNameSchema,
+  inAnyPolygon,
   OBSTACLE_KINDS,
   type ObstacleKind,
   type Point,
   type JoinError,
   type TokenView,
 } from '@dnd-map/shared';
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
+import { FogPanel } from '../components/FogPanel';
 import { MapCanvas } from '../components/MapCanvas';
 import { MapControls } from '../components/MapControls';
 import { ObstaclePanel } from '../components/ObstaclePanel';
@@ -21,6 +23,7 @@ import { MonsterPalette, PlayersToPlace, TokenList } from '../components/TokenPa
 import {
   useSession,
   type CharacterActions,
+  type FogActions,
   type MapActions,
   type ObstacleActions,
   isPlayerPlacement,
@@ -54,6 +57,7 @@ export function SessionPage() {
     remoteDrags,
     characterNotice,
     obstacleActions,
+    fogActions,
     actionNotice,
   } = useSession(inviteCode);
 
@@ -100,6 +104,7 @@ export function SessionPage() {
           outdated={outdated}
           characterNotice={characterNotice}
           obstacleActions={obstacleActions}
+          fogActions={fogActions}
           actionNotice={actionNotice}
         />
       );
@@ -130,9 +135,11 @@ function JoinedView({
   outdated,
   characterNotice,
   obstacleActions,
+  fogActions,
   actionNotice,
 }: {
   obstacleActions: ObstacleActions;
+  fogActions: FogActions;
   actionNotice: { text: string; nonce: number } | null;
   outdated: boolean;
   characterNotice: { text: string; nonce: number } | null;
@@ -149,6 +156,7 @@ function JoinedView({
   const [selectedObstacleId, setSelectedObstacleId] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ x: number; y: number; nonce: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [previewFog, setPreviewFog] = useState(false);
   const { world, self } = state;
   const offline = !state.connected;
   const isMaster = self.role === 'master';
@@ -163,6 +171,21 @@ function JoinedView({
       p.role === 'player' &&
       !world.tokens.some((t) => t.type === 'player_character' && t.ownerParticipantId === p.id),
   );
+  const fog = world.fog;
+  // The master sees everything, with the party's area lit; "as players" cuts out what they would not see.
+  const asPlayers = isMaster && fog.enabled && previewFog;
+  const shown = useMemo(() => {
+    if (!asPlayers) return { tokens: world.tokens, obstacles: world.obstacles };
+    return {
+      tokens: world.tokens.filter(
+        (t) => t.type === 'player_character' || (t.visible && inAnyPolygon(t, fog.polygons)),
+      ),
+      obstacles: world.obstacles,
+    };
+  }, [asPlayers, world.tokens, world.obstacles, fog.polygons]);
+  const fogProp = fog.enabled ? { state: fog, opacity: isMaster && !asPlayers ? 0.3 : 0.7 } : null;
+  const playersSeeNothing = !isMaster && fog.enabled && fog.polygons.length === 0;
+  const hasCharacters = world.tokens.some((t) => t.type === 'player_character');
   // A selection of a token that is gone (deleted, hidden, other map) simply stops applying.
   const selected = world.tokens.find((t) => t.id === selectedId) ?? null;
 
@@ -325,8 +348,9 @@ function JoinedView({
                 actions.updateGrid(currentMap.id, result);
                 setCalibrating(false);
               }}
+              fog={fogProp}
               obstacles={{
-                list: world.obstacles,
+                list: shown.obstacles,
                 selectedId: selectedObstacle?.id ?? null,
                 tool: isMaster ? tool : null,
                 stopsTokens: !isMaster,
@@ -334,7 +358,7 @@ function JoinedView({
                 onDraw: (kind, from, to) => void drawObstacle(kind, from, to),
               }}
               tokens={{
-                list: world.tokens,
+                list: shown.tokens,
                 selectedId: selected?.id ?? null,
                 canMove,
                 remoteDrags,
@@ -353,7 +377,7 @@ function JoinedView({
           {currentMap ? (
             // The canvas is a picture to assistive technology; this list says what is on it.
             <ul className="sr-only" aria-label="Препятствия">
-              {world.obstacles.map((o) => (
+              {shown.obstacles.map((o) => (
                 <li key={o.id}>
                   {OBSTACLE_KINDS[o.kind].label}, клетки {describeCells(currentMap.grid, o)}
                   {o.blocksSight ? '' : ' (не закрывает обзор)'}
@@ -363,7 +387,7 @@ function JoinedView({
           ) : null}
           {currentMap ? (
             <ul className="sr-only" aria-label="Фишки на карте" aria-live="polite">
-              {world.tokens.map((t) => {
+              {shown.tokens.map((t) => {
                 const { col, row } = cellOf(currentMap.grid, t);
                 return (
                   <li key={t.id} data-token-id={t.id}>
@@ -379,6 +403,11 @@ function JoinedView({
                 ? 'Загрузите изображение карты в панели справа.'
                 : 'Мастер ещё не загрузил карту.'}
             </p>
+          )}
+          {playersSeeNothing && (
+            <div className="map-hint" role="status">
+              Туман войны: пока на карте нет ни одного персонажа, всё затемнено. Поставьте своего.
+            </div>
           )}
           {offline && (
             <div className="map-hint offline-pill" role="status">
@@ -421,6 +450,15 @@ function JoinedView({
                   setTool(null);
                 }
               }}
+            />
+          )}
+          {isMaster && currentMap && (
+            <FogPanel
+              fog={fog}
+              actions={fogActions}
+              preview={previewFog}
+              onPreviewChange={setPreviewFog}
+              hasCharacters={hasCharacters}
             />
           )}
           {isMaster && currentMap && (

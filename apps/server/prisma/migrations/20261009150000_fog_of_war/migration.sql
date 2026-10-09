@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "maps" ADD COLUMN     "fogEnabled" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "fogRadius" DOUBLE PRECISION NOT NULL DEFAULT 6;
+

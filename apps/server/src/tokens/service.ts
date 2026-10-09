@@ -58,14 +58,21 @@ export function createTokenService(prisma: PrismaClient) {
     return session.currentMapId === row.mapId ? row : null;
   }
 
+  /** `before` is the row as it was before the change, null for a token that did not exist yet. */
   const changeOf = (
     version: number,
     row: Token,
-    wasVisible: boolean,
+    before: Token | null,
     removed = false,
   ): TokenOutcome => ({
     ok: true,
-    change: { version, token: toTokenView(row), wasVisible, removed },
+    change: {
+      version,
+      token: toTokenView(row),
+      previous: before && toTokenView(before),
+      wasVisible: before?.visibleToPlayers ?? false,
+      removed,
+    },
   });
 
   /**
@@ -146,7 +153,7 @@ export function createTokenService(prisma: PrismaClient) {
           at: { x: at.x, y: at.y },
           visible: row.visibleToPlayers,
         });
-        return changeOf(version, row, false);
+        return changeOf(version, row, null);
       });
     },
 
@@ -208,7 +215,7 @@ export function createTokenService(prisma: PrismaClient) {
             owner: ownerId,
             at: { x: at.x, y: at.y },
           });
-          return changeOf(version, row, false);
+          return changeOf(version, row, null);
         })
         .catch((err: unknown) => {
           if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -248,7 +255,7 @@ export function createTokenService(prisma: PrismaClient) {
           from: { x: row.x, y: row.y },
           to: { x: at.x, y: at.y },
         });
-        return changeOf(version, updated, row.visibleToPlayers);
+        return changeOf(version, updated, row);
       });
     },
 
@@ -269,7 +276,7 @@ export function createTokenService(prisma: PrismaClient) {
           tokenId: row.id,
           name: row.name,
         });
-        return changeOf(version, row, row.visibleToPlayers, true);
+        return changeOf(version, row, row, true);
       });
     },
 
@@ -294,7 +301,7 @@ export function createTokenService(prisma: PrismaClient) {
           tokenId: row.id,
           visible,
         });
-        return changeOf(version, updated, row.visibleToPlayers);
+        return changeOf(version, updated, row);
       });
     },
   };

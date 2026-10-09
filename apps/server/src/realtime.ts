@@ -4,7 +4,9 @@ import {
   characterPlaceSchema,
   defaultCharacterIcon,
   BUILTIN_ICON_PREFIX,
+  fogUpdateSchema,
   gridUpdateSchema,
+  inAnyPolygon,
   joinRequestSchema,
   obstacleAddSchema,
   obstacleClearSchema,
@@ -25,6 +27,7 @@ import type {
   ClientToServerEvents,
   GridUpdateResult,
   JoinRequest,
+  FogState,
   JoinResult,
   ObstacleRemoveResult,
   ObstacleResult,
@@ -45,6 +48,8 @@ import type { ObstacleOutcome, ObstacleService } from './obstacles/service';
 import type { SessionService } from './sessions/service';
 import { createSocketGuard } from './rate-limit';
 import { patchFor, type TokenChange } from './tokens/patch';
+import type { VisionService } from './vision/service';
+import { seenByPlayers } from './vision/view';
 import type { TokenOutcome, TokenService } from './tokens/service';
 
 /**
@@ -64,6 +69,7 @@ interface RealtimeDeps {
   tokens: TokenService;
   characters: CharacterService;
   obstacles: ObstacleService;
+  vision: VisionService;
   /** Drop events from connections that send too many (see rate-limit.ts). */
   rateLimit: boolean;
   log: FastifyBaseLogger;
@@ -82,7 +88,7 @@ export interface Realtime {
 
 export function registerRealtime(
   io: IoServer,
-  { sessions, maps, tokens, characters, obstacles, rateLimit, log }: RealtimeDeps,
+  { sessions, maps, tokens, characters, obstacles, vision, rateLimit, log }: RealtimeDeps,
 ): Realtime {
   const inFlight = new Set<Promise<void>>();
   const track = (work: Promise<void>): void => {
@@ -115,8 +121,22 @@ export function registerRealtime(
    */
   const dragCache = new Map<string, { sessionId: string; token: TokenView; expiresAt: number }>();
   const DRAG_CACHE_MS = 2000;
+  /**
+   * What the party currently sees, for deciding whether a live drag may be shown to players. Kept
+   * very briefly and dropped by forgetSession whenever characters, obstacles, the fog or the map
+   * change, so a monster is never shown on stale information.
+   */
+  const fogCache = new Map<string, { fog: FogState; expiresAt: number }>();
   const forgetSession = (sessionId: string) => {
     for (const [id, entry] of dragCache) if (entry.sessionId === sessionId) dragCache.delete(id);
+    fogCache.delete(sessionId);
+  };
+  const currentFog = async (sessionId: string): Promise<FogState> => {
+    const cached = fogCache.get(sessionId);
+    if (cached && cached.expiresAt > Date.now()) return cached.fog;
+    const fog = await vision.fogOf(sessionId);
+    fogCache.set(sessionId, { fog, expiresAt: Date.now() + DRAG_CACHE_MS });
+    return fog;
   };
 
   const broadcastState = async (sessionId: string): Promise<void> => {
@@ -187,20 +207,46 @@ export function registerRealtime(
     ownerParticipantId: t.ownerParticipantId,
   });
 
-  /** Sends every role the patch it may see, to everyone in the session except the sender. */
-  const emitPatches = (from: IoSocket | IoServer, sessionId: string, change: TokenChange) => {
+  /**
+   * Tells everybody what a token change means to them (the sender is skipped when `from` is a
+   * socket). The master hears everything. Players hear what they may see: without fog a monster
+   * unless it is hidden; with fog also only what is within sight. When a character appears,
+   * moves or goes, the party's sight itself changes, and every player gets a whole new view.
+   */
+  const emitPatches = async (
+    from: IoSocket | IoServer,
+    sessionId: string,
+    change: TokenChange,
+  ): Promise<void> => {
+    forgetSession(sessionId);
     dragCache.delete(change.token.id);
-    for (const role of ['master', 'player'] as const) {
-      from.to(roleRoom(sessionId, role)).emit('tokens.changed', patchFor(change, role));
+    const fog = await currentFog(sessionId);
+
+    if (fog.enabled && change.token.type === 'player_character') {
+      // The party's sight changed: everybody gets a new view, the master too (for the lit area).
+      await broadcastState(sessionId);
+      return;
+    }
+    from.to(roleRoom(sessionId, 'master')).emit('tokens.changed', patchFor(change, 'master'));
+    if (!fog.enabled) {
+      from.to(roleRoom(sessionId, 'player')).emit('tokens.changed', patchFor(change, 'player'));
+    } else {
+      const seen = {
+        before: change.previous !== null && seenByPlayers(change.previous, fog),
+        now: !change.removed && seenByPlayers(change.token, fog),
+      };
+      from
+        .to(roleRoom(sessionId, 'player'))
+        .emit('tokens.changed', patchFor(change, 'player', seen));
     }
   };
 
-  const emitTokenChange = (socket: IoSocket, sessionId: string, outcome: TokenOutcome) => {
-    if (outcome.ok) emitPatches(socket, sessionId, outcome.change);
+  const emitTokenChange = async (socket: IoSocket, sessionId: string, outcome: TokenOutcome) => {
+    if (outcome.ok) await emitPatches(socket, sessionId, outcome.change);
   };
 
   const announceCharacter = async (sessionId: string, change: TokenChange | null) => {
-    if (change) emitPatches(io, sessionId, change);
+    if (change) await emitPatches(io, sessionId, change);
     await broadcastParticipants(sessionId);
   };
 
@@ -246,9 +292,13 @@ export function registerRealtime(
     return { ok: true, icon: result.icon };
   };
 
-  const tokenResult = (socket: IoSocket, sessionId: string, outcome: TokenOutcome): TokenResult => {
+  const tokenResult = async (
+    socket: IoSocket,
+    sessionId: string,
+    outcome: TokenOutcome,
+  ): Promise<TokenResult> => {
     if (!outcome.ok) return outcome;
-    emitTokenChange(socket, sessionId, outcome);
+    await emitTokenChange(socket, sessionId, outcome);
     return { ok: true, version: outcome.change.version, token: outcome.change.token };
   };
 
@@ -315,7 +365,7 @@ export function registerRealtime(
       (t) => can(actorOf(joined), 'token.delete', tokenSubject(t)),
     );
     if (!outcome.ok) return outcome;
-    emitTokenChange(socket, joined.sessionId, outcome);
+    await emitTokenChange(socket, joined.sessionId, outcome);
     return { ok: true, version: outcome.change.version };
   };
 
@@ -339,8 +389,31 @@ export function registerRealtime(
     const token = cached.token;
     if (!can(actorOf(joined), 'token.move', tokenSubject(token))) return;
 
-    const room = token.visible ? joined.sessionId : roleRoom(joined.sessionId, 'master');
+    // Players see a drag only if they could see the monster itself: not hidden, and (with fog) in sight.
+    let shownToPlayers = token.visible;
+    if (shownToPlayers && token.type === 'monster') {
+      const fog = await currentFog(joined.sessionId);
+      if (fog.enabled && !inAnyPolygon(parsed.data, fog.polygons)) shownToPlayers = false;
+    }
+    const room = shownToPlayers ? joined.sessionId : roleRoom(joined.sessionId, 'master');
     socket.to(room).emit('token.dragging', parsed.data);
+  };
+
+  const updateFog = async (
+    socket: IoSocket,
+    request: unknown,
+  ): Promise<ActionResult<{ version: number }>> => {
+    const joined = socket.data.session;
+    if (!joined) return { ok: false, error: 'not_joined' };
+    if (!can(actorOf(joined), 'fog.update')) return { ok: false, error: 'forbidden' };
+    const parsed = fogUpdateSchema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'invalid_request' };
+
+    const result = await maps.updateFog(joined.sessionId, joined.participantId, parsed.data);
+    if (!result) return { ok: false, error: 'map_not_found' };
+    // Everybody's view changes: players get theirs without what is now out of sight (or all of it back).
+    await broadcastState(joined.sessionId);
+    return { ok: true, version: result.version };
   };
 
   /** Runs an obstacle edit for the master and passes the change on to everybody else. */
@@ -360,7 +433,12 @@ export function registerRealtime(
     if (!outcome.ok) return outcome;
     const { patch, obstacle } = outcome;
     if (patch.upserted.length > 0 || patch.removedIds.length > 0) {
-      socket.to(joined.sessionId).emit('obstacles.changed', patch);
+      // Walls change what the party sees: with fog players get a whole new view, without it the patch.
+      forgetSession(joined.sessionId);
+      const fog = await currentFog(joined.sessionId);
+      if (fog.enabled)
+        await broadcastState(joined.sessionId); // the area in sight changes for both roles
+      else socket.to(joined.sessionId).emit('obstacles.changed', patch);
     }
     return obstacle
       ? { ok: true, version: patch.version, obstacle }
@@ -486,6 +564,12 @@ export function registerRealtime(
     );
     socket.on('token.setVisibility', (request, ack) =>
       acked('token.setVisibility', ack, () => setTokenVisibility(socket, request), {
+        ok: false,
+        error: 'internal',
+      } as const),
+    );
+    socket.on('fog.update', (request, ack) =>
+      acked('fog.update', ack, () => updateFog(socket, request), {
         ok: false,
         error: 'internal',
       } as const),

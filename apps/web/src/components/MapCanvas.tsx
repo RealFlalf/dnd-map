@@ -3,6 +3,7 @@ import {
   GRID_SCALE_MAX,
   GRID_SCALE_MIN,
   type MapView,
+  type FogState,
   type ObstacleKind,
   type ObstacleView,
   type TokenView,
@@ -11,6 +12,7 @@ import type Konva from 'konva';
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { Image as KonvaImage, Layer, Rect, Shape, Stage } from 'react-konva';
 import { isPlayerPlacement, type Placing, type RemoteDrags } from '../session/useSession';
+import { FogLayer } from './FogLayer';
 import { ObstacleLayer } from './ObstacleLayer';
 import { TOOL_HINTS, type ObstacleTool } from './obstacleTools';
 import { PALETTE_MIME, parsePlacement } from './placement';
@@ -59,8 +61,15 @@ export interface ObstaclesProps {
   onDraw(kind: ObstacleKind, from: Point, to: Point): void;
 }
 
+export interface FogProps {
+  state: FogState;
+  /** How dark the fog is drawn; 0 hides it. */
+  opacity: number;
+}
+
 interface Props {
   map: MapView;
+  fog: FogProps | null;
   obstacles: ObstaclesProps;
   tokens: TokensProps;
   /** While set, a click on the map places a token instead of selecting: a monster, or the player's own character. */
@@ -85,6 +94,7 @@ const prefersPreview = () => window.matchMedia('(pointer: coarse)').matches;
 
 export function MapCanvas({
   map,
+  fog,
   obstacles,
   calibrating,
   onCalibrated,
@@ -385,6 +395,9 @@ export function MapCanvas({
             onDrag={tokens.onDrag}
             onMove={tokens.onMove}
           />
+          {fog && fog.opacity > 0 && (
+            <FogLayer fog={fog.state} width={map.width} height={map.height} opacity={fog.opacity} />
+          )}
           {drawing && wallTool && <WallPreview map={map} from={drawing.from} to={drawing.to} />}
           {selection && (
             <Layer listening={false}>

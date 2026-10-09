@@ -1,3 +1,4 @@
+import { Panel } from './Panel';
 import {
   describeCells,
   OBSTACLE_KINDS,
@@ -32,8 +33,7 @@ export function ObstaclePanel({ tool, onToolChange, grid, obstacles, selected, a
   };
 
   return (
-    <section className="panel">
-      <h3>Препятствия</h3>
+    <Panel id="obstacles" title={<>Препятствия</>}>
       <div className="tool-row" role="group" aria-label="Инструмент">
         {TOOLS.map(({ tool: t, label }) => (
           <button
@@ -78,6 +78,6 @@ export function ObstaclePanel({ tool, onToolChange, grid, obstacles, selected, a
           Убрать все ({obstacles.length})
         </button>
       )}
-    </section>
+    </Panel>
   );
 }

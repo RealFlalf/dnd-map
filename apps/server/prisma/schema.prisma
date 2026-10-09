@@ -75,6 +75,9 @@ model Map {
   gridOffsetY Float    @default(0)
   gridVisible Boolean  @default(true)
   gridSnap    Boolean  @default(true)
+  /// Fog of war: players see only what the characters can see within `fogRadius` cells.
+  fogEnabled  Boolean  @default(false)
+  fogRadius   Float    @default(6)
   createdAt   DateTime @default(now())
 
   session          Session    @relation("SessionMaps", fields: [sessionId], references: [id], onDelete: Cascade)

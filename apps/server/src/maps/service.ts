@@ -2,6 +2,7 @@ import {
   applyGridUpdate,
   MAX_MAPS_PER_SESSION,
   type GridSettings,
+  type FogUpdate,
   type GridUpdate,
   type MapView,
   type Role,
@@ -9,9 +10,10 @@ import {
 } from '@dnd-map/shared';
 import { Prisma, type Map as MapRow, type PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
-import { bumpVersion, gridOf } from '../db-utils';
+import { bumpVersion, gridOf, logEvent } from '../db-utils';
 import { toObstacleView } from '../obstacles/view';
 import { toTokenView } from '../tokens/view';
+import { NO_FOG, viewFor } from '../vision/view';
 import type { ProcessedImage } from './image';
 import type { FileStorage } from './storage';
 
@@ -55,31 +57,63 @@ export function createMapService(prisma: PrismaClient, storage: FileStorage) {
             where: { id: sessionId },
             select: { version: true, currentMapId: true, maps: { orderBy: { createdAt: 'asc' } } },
           });
-          const tokens = session.currentMapId
-            ? await tx.token.findMany({
-                where: {
-                  mapId: session.currentMapId,
-                  ...(viewer === 'player' && { visibleToPlayers: true }),
-                },
-                orderBy: { createdAt: 'asc' },
+          const current = session.maps.find((m) => m.id === session.currentMapId) ?? null;
+          const [tokens, obstacles] = current
+            ? await Promise.all([
+                tx.token.findMany({ where: { mapId: current.id }, orderBy: { createdAt: 'asc' } }),
+                tx.obstacle.findMany({
+                  where: { mapId: current.id },
+                  orderBy: { createdAt: 'asc' },
+                }),
+              ])
+            : [[], []];
+          // The role's own view: what players may not see (hidden monsters, everything out of sight
+          // when there is fog) is cut out here, before anything leaves the server.
+          const view = current
+            ? viewFor(viewer, {
+                grid: gridOf(current),
+                fog: { enabled: current.fogEnabled, radius: current.fogRadius },
+                tokens: tokens.map(toTokenView),
+                obstacles: obstacles.map(toObstacleView),
               })
-            : [];
-          const obstacles = session.currentMapId
-            ? await tx.obstacle.findMany({
-                where: { mapId: session.currentMapId },
-                orderBy: { createdAt: 'asc' },
-              })
-            : [];
+            : { fog: NO_FOG, tokens: [], obstacles: [] };
           return {
             version: session.version,
             currentMapId: session.currentMapId,
             maps: session.maps.map(toView),
-            tokens: tokens.map(toTokenView),
-            obstacles: obstacles.map(toObstacleView),
+            ...view,
           };
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
       );
+    },
+
+    /** Fog of war of the current map: on or off, and how far the party sees. Returns the new version. */
+    async updateFog(
+      sessionId: string,
+      actorId: string,
+      req: FogUpdate,
+    ): Promise<{ version: number } | null> {
+      return prisma.$transaction(async (tx) => {
+        const session = await tx.session.findUniqueOrThrow({
+          where: { id: sessionId },
+          select: { currentMapId: true },
+        });
+        if (session.currentMapId !== req.mapId) return null;
+        await tx.map.update({
+          where: { id: req.mapId },
+          data: {
+            ...(req.enabled !== undefined && { fogEnabled: req.enabled }),
+            ...(req.radius !== undefined && { fogRadius: req.radius }),
+          },
+        });
+        const { version } = await bumpVersion(tx, sessionId);
+        await logEvent(tx, sessionId, actorId, 'fog.update', {
+          enabled: req.enabled,
+          radius: req.radius,
+        });
+        return { version };
+      });
     },
 
     /** Stores the files, adds the map and makes it the current one. */

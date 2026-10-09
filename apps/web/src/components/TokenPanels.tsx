@@ -1,3 +1,4 @@
+import { Panel } from './Panel';
 import {
   cellOf,
   MONSTER_ICONS,
@@ -52,8 +53,7 @@ export function MonsterPalette({
   };
 
   return (
-    <section className="panel">
-      <h3>Мобы</h3>
+    <Panel id="monsters" title={<>Мобы</>}>
       <div className="palette">
         {MONSTER_ICONS.map((icon) => (
           // A div, not a button: Firefox does not start drags from buttons.
@@ -100,7 +100,7 @@ export function MonsterPalette({
       <p className="hint">
         Нажмите на значок и затем на карту — или перетащите значок на карту. Esc — закончить.
       </p>
-    </section>
+    </Panel>
   );
 }
 
@@ -120,8 +120,7 @@ export function TokenList({
   actions: Pick<TokenActions, 'remove' | 'setVisible'>;
 }) {
   return (
-    <section className="panel">
-      <h3>Фишки на карте ({tokens.length})</h3>
+    <Panel id="tokens" title={<>Фишки на карте ({tokens.length})</>}>
       {tokens.length === 0 ? (
         <p className="hint">Пока пусто.</p>
       ) : (
@@ -168,7 +167,7 @@ export function TokenList({
           })}
         </ul>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -184,8 +183,7 @@ export function PlayersToPlace({
 }) {
   if (players.length === 0) return null;
   return (
-    <section className="panel">
-      <h3>Игроки без персонажа</h3>
+    <Panel id="unplaced" title={<>Игроки без персонажа</>}>
       <ul className="token-list">
         {players.map((p) => {
           const active = placing?.forPlayer === p.id;
@@ -214,6 +212,6 @@ export function PlayersToPlace({
         })}
       </ul>
       <p className="hint">Нажмите «Поставить» и затем на карту.</p>
-    </section>
+    </Panel>
   );
 }

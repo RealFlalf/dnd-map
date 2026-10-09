@@ -18,6 +18,7 @@ const token = (visible: boolean): TokenView => ({
 const change = (over: Partial<TokenChange> & { visible: boolean }): TokenChange => ({
   version: 7,
   token: token(over.visible),
+  previous: null,
   wasVisible: over.visible,
   removed: false,
   ...over,
@@ -55,5 +56,47 @@ describe('patchFor', () => {
     const hidden = change({ visible: false, wasVisible: false, removed: true });
     expect(patchFor(hidden, 'master').removedIds).toEqual(['t1']);
     expect(patchFor(hidden, 'player')).toEqual(empty);
+  });
+
+  describe('with fog of war', () => {
+    const moved = change({ visible: true, previous: token(true) });
+
+    it('shows a monster to players when it comes into view, and hides it when it leaves', () => {
+      expect(patchFor(moved, 'player', { before: false, now: true })).toEqual({
+        version: 7,
+        upserted: [moved.token],
+        removedIds: [],
+      });
+      expect(patchFor(moved, 'player', { before: true, now: false })).toEqual({
+        version: 7,
+        upserted: [],
+        removedIds: ['t1'],
+      });
+    });
+
+    it('says nothing to players about a monster that stays out of sight, but keeps their version moving', () => {
+      expect(patchFor(moved, 'player', { before: false, now: false })).toEqual(empty);
+    });
+
+    it('updates a monster that stays in view, as without fog', () => {
+      expect(patchFor(moved, 'player', { before: true, now: true }).upserted).toEqual([
+        moved.token,
+      ]);
+    });
+
+    it('does not let fog change what the master hears', () => {
+      expect(patchFor(moved, 'master', { before: false, now: false }).upserted).toEqual([
+        moved.token,
+      ]);
+      const gone = change({ visible: true, removed: true });
+      expect(patchFor(gone, 'master', { before: false, now: false }).removedIds).toEqual(['t1']);
+    });
+
+    it('trusts the fog answer over the hidden flag only to narrow, never to widen: callers pass both', () => {
+      // a visible-flagged monster out of sight is not sent; the caller never passes now=true for a hidden one
+      expect(patchFor(change({ visible: false }), 'player', { before: false, now: false })).toEqual(
+        empty,
+      );
+    });
   });
 });

@@ -6,6 +6,7 @@ import type {
   MapRef,
   SessionState,
 } from './map';
+import type { FogUpdate } from './vision';
 import type {
   ObstacleAdd,
   ObstacleClear,
@@ -34,7 +35,7 @@ import type { JoinRequest, JoinResult, ParticipantView } from './session';
  * Socket.IO contract shared by the server and the web client.
  * Bump PROTOCOL_VERSION on any breaking change to these events.
  */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 export interface HelloPayload {
   protocolVersion: number;
@@ -86,6 +87,8 @@ export interface ClientToServerEvents {
   ) => void;
   /** Player only: puts the player's own character on the current map (once per map). */
   'character.place': (request: CharacterPlace, ack: (res: TokenResult) => void) => void;
+  /** Master only: turns the fog on or off and sets how far the party sees. Everyone gets a fresh snapshot. */
+  'fog.update': (request: FogUpdate, ack: (res: ActionResult<{ version: number }>) => void) => void;
   /** Master only. The server snaps the rectangle to whole grid cells. */
   'obstacle.add': (request: ObstacleAdd, ack: (res: ObstacleResult) => void) => void;
   /** Master only. */

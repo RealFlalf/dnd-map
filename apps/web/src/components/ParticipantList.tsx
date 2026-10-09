@@ -1,3 +1,4 @@
+import { Panel } from './Panel';
 import type { ParticipantView } from '@dnd-map/shared';
 import { TokenIcon } from './TokenIcon';
 
@@ -16,8 +17,10 @@ export function ParticipantList({
   );
 
   return (
-    <section>
-      <h3>Участники ({participants.filter((p) => p.online).length} онлайн)</h3>
+    <Panel
+      id="participants"
+      title={<>Участники ({participants.filter((p) => p.online).length} онлайн)</>}
+    >
       <ul className="participants">
         {sorted.map((p) => (
           <li key={p.id} className={p.online ? '' : 'offline'}>
@@ -34,6 +37,6 @@ export function ParticipantList({
           </li>
         ))}
       </ul>
-    </section>
+    </Panel>
   );
 }
