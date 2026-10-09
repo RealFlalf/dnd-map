@@ -6,6 +6,10 @@ import {
   BUILTIN_ICON_PREFIX,
   gridUpdateSchema,
   joinRequestSchema,
+  obstacleAddSchema,
+  obstacleClearSchema,
+  obstacleRefSchema,
+  obstacleSightSchema,
   mapRefSchema,
   MAX_PARTICIPANTS,
   PROTOCOL_VERSION,
@@ -22,6 +26,8 @@ import type {
   GridUpdateResult,
   JoinRequest,
   JoinResult,
+  ObstacleRemoveResult,
+  ObstacleResult,
   ParticipantView,
   Role,
   ServerToClientEvents,
@@ -35,6 +41,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { Server, Socket } from 'socket.io';
 import type { CharacterService } from './characters/service';
 import type { MapService } from './maps/service';
+import type { ObstacleOutcome, ObstacleService } from './obstacles/service';
 import type { SessionService } from './sessions/service';
 import { createSocketGuard } from './rate-limit';
 import { patchFor, type TokenChange } from './tokens/patch';
@@ -56,6 +63,7 @@ interface RealtimeDeps {
   maps: MapService;
   tokens: TokenService;
   characters: CharacterService;
+  obstacles: ObstacleService;
   /** Drop events from connections that send too many (see rate-limit.ts). */
   rateLimit: boolean;
   log: FastifyBaseLogger;
@@ -74,7 +82,7 @@ export interface Realtime {
 
 export function registerRealtime(
   io: IoServer,
-  { sessions, maps, tokens, characters, rateLimit, log }: RealtimeDeps,
+  { sessions, maps, tokens, characters, obstacles, rateLimit, log }: RealtimeDeps,
 ): Realtime {
   const inFlight = new Set<Promise<void>>();
   const track = (work: Promise<void>): void => {
@@ -214,6 +222,7 @@ export function registerRealtime(
       joined.participantId,
       ownerId,
       parsed.data,
+      { ignoreObstacles: joined.role === 'master' },
     );
     return tokenResult(socket, joined.sessionId, outcome);
   };
@@ -253,7 +262,10 @@ export function registerRealtime(
     const parsed = tokenCreateSchema.safeParse(request);
     if (!parsed.success) return { ok: false, error: 'invalid_request' };
 
-    const outcome = await tokens.create(joined.sessionId, joined.participantId, parsed.data);
+    // Only the master gets here (checked above), and the master ignores obstacles.
+    const outcome = await tokens.create(joined.sessionId, joined.participantId, parsed.data, {
+      ignoreObstacles: true,
+    });
     return tokenResult(socket, joined.sessionId, outcome);
   };
 
@@ -269,6 +281,7 @@ export function registerRealtime(
       parsed.data.tokenId,
       parsed.data,
       (t) => can(actorOf(joined), 'token.move', tokenSubject(t)),
+      { ignoreObstacles: joined.role === 'master' },
     );
     return tokenResult(socket, joined.sessionId, outcome);
   };
@@ -328,6 +341,30 @@ export function registerRealtime(
 
     const room = token.visible ? joined.sessionId : roleRoom(joined.sessionId, 'master');
     socket.to(room).emit('token.dragging', parsed.data);
+  };
+
+  /** Runs an obstacle edit for the master and passes the change on to everybody else. */
+  const editObstacles = async <R extends object>(
+    socket: IoSocket,
+    request: unknown,
+    schema: { safeParse(value: unknown): { success: true; data: R } | { success: false } },
+    run: (sessionId: string, actorId: string, data: R) => Promise<ObstacleOutcome>,
+  ): Promise<ObstacleResult | ObstacleRemoveResult> => {
+    const joined = socket.data.session;
+    if (!joined) return { ok: false, error: 'not_joined' };
+    if (!can(actorOf(joined), 'obstacle.edit')) return { ok: false, error: 'forbidden' };
+    const parsed = schema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'invalid_request' };
+
+    const outcome = await run(joined.sessionId, joined.participantId, parsed.data);
+    if (!outcome.ok) return outcome;
+    const { patch, obstacle } = outcome;
+    if (patch.upserted.length > 0 || patch.removedIds.length > 0) {
+      socket.to(joined.sessionId).emit('obstacles.changed', patch);
+    }
+    return obstacle
+      ? { ok: true, version: patch.version, obstacle }
+      : { ok: true, version: patch.version };
   };
 
   const join = async (socket: IoSocket, request: JoinRequest): Promise<JoinResult> => {
@@ -452,6 +489,50 @@ export function registerRealtime(
         ok: false,
         error: 'internal',
       } as const),
+    );
+    socket.on('obstacle.add', (request, ack) =>
+      acked(
+        'obstacle.add',
+        ack,
+        () =>
+          editObstacles(socket, request, obstacleAddSchema, (sid, actor, data) =>
+            obstacles.add(sid, actor, data),
+          ),
+        { ok: false, error: 'internal' } as const,
+      ),
+    );
+    socket.on('obstacle.remove', (request, ack) =>
+      acked(
+        'obstacle.remove',
+        ack,
+        () =>
+          editObstacles(socket, request, obstacleRefSchema, (sid, actor, data) =>
+            obstacles.remove(sid, actor, data.obstacleId),
+          ),
+        { ok: false, error: 'internal' } as const,
+      ),
+    );
+    socket.on('obstacle.setSight', (request, ack) =>
+      acked(
+        'obstacle.setSight',
+        ack,
+        () =>
+          editObstacles(socket, request, obstacleSightSchema, (sid, actor, data) =>
+            obstacles.setSight(sid, actor, data.obstacleId, data.blocksSight),
+          ),
+        { ok: false, error: 'internal' } as const,
+      ),
+    );
+    socket.on('obstacle.clear', (request, ack) =>
+      acked(
+        'obstacle.clear',
+        ack,
+        () =>
+          editObstacles(socket, request, obstacleClearSchema, (sid, actor, data) =>
+            obstacles.clear(sid, actor, data.mapId),
+          ),
+        { ok: false, error: 'internal' } as const,
+      ),
     );
     socket.on('character.setIcon', (request, ack) =>
       acked('character.setIcon', ack, () => setCharacterIcon(socket, request), {

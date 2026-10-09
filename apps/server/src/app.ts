@@ -14,6 +14,7 @@ import { createHttpLimiter, type HttpRuleName } from './rate-limit';
 import { registerRealtime, type IoServer } from './realtime';
 import { registerSessionRoutes } from './sessions/routes';
 import { createSessionService } from './sessions/service';
+import { createObstacleService } from './obstacles/service';
 import { createTokenService } from './tokens/service';
 
 export interface AppDeps {
@@ -46,6 +47,7 @@ export async function buildApp({ config, db }: AppDeps) {
   const maps = createMapService(db.prisma, storage);
   const tokens = createTokenService(db.prisma);
   const characters = createCharacterService(db.prisma, storage);
+  const obstacles = createObstacleService(db.prisma);
   const rateLimit = config.RATE_LIMIT === 'on';
 
   if (rateLimit) {
@@ -108,6 +110,7 @@ export async function buildApp({ config, db }: AppDeps) {
     maps,
     tokens,
     characters,
+    obstacles,
     rateLimit,
     log: app.log,
   });

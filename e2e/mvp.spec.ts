@@ -10,10 +10,12 @@ import {
   dragOnMap,
   fixture,
   joinAsPlayer,
+  obstaclesOn,
   mapPoint,
   recordClientTraffic,
   recordServerTraffic,
   tokensOn,
+  tool,
   uploadMap,
   waitForMap,
 } from './helpers';
@@ -279,4 +281,81 @@ test('on a phone a player can place and move their character with a finger', asy
     await touch('touchMove', [[x + ((tx - x) * i) / 10, y + ((ty - y) * i) / 10]]);
   await touch('touchEnd', []);
   await expect(tokensOn(master)).toHaveText(['Сэм, клетка 9, 6']);
+});
+
+test('obstacles: the master builds walls, players cannot cross them, the master takes them down', async ({
+  page: master,
+  browser,
+}) => {
+  const inviteUrl = await createSessionAsMaster(master);
+  await uploadMap(master, 'dungeon.png');
+  const alice = await joinAsPlayer(browser, inviteUrl, 'Алиса');
+  await waitForMap(alice);
+  await alice.getByRole('button', { name: 'Поставить на карту' }).click();
+  await clickMap(alice, cell(3, 5));
+  await expect(tokensOn(master)).toHaveText(['Алиса, клетка 3, 5']);
+
+  // a wall down the whole of column 6, drawn with the mouse; the players see it
+  await tool(master, 'Стена').click();
+  await dragOnMap(master, cell(6, 1), cell(6, 10));
+  await expect(obstaclesOn(master)).toHaveText(['Стена, клетки 6 × 1–10']);
+  await expect(obstaclesOn(alice)).toHaveText(['Стена, клетки 6 × 1–10']);
+  await master.keyboard.press('Escape');
+
+  // she cannot cross it, and is told why; the token stays where it was
+  await dragOnMap(alice, cell(3, 5), cell(9, 5));
+  await expect(alice.getByText('Туда не пройти: мешает препятствие')).toBeVisible();
+  await expect(tokensOn(alice)).toHaveText(['Алиса, клетка 3, 5']);
+  await expect(tokensOn(master)).toHaveText(['Алиса, клетка 3, 5']);
+
+  // right up to the wall is fine
+  await dragOnMap(alice, cell(3, 5), cell(5, 5));
+  await expect(tokensOn(master)).toHaveText(['Алиса, клетка 5, 5']);
+
+  // the master is not stopped: moves her through the wall
+  await dragOnMap(master, cell(5, 5), cell(8, 5));
+  await expect(tokensOn(alice)).toHaveText(['Алиса, клетка 8, 5']);
+  await dragOnMap(master, cell(8, 5), cell(5, 5));
+  await expect(tokensOn(alice)).toHaveText(['Алиса, клетка 5, 5']);
+
+  // a pillar and a barrel by clicking on cells
+  await tool(master, 'Столб').click();
+  await clickMap(master, cell(4, 2));
+  await tool(master, 'Бочка').click();
+  await clickMap(master, cell(4, 3));
+  await master.keyboard.press('Escape');
+  await expect(obstaclesOn(alice)).toHaveText([
+    'Стена, клетки 6 × 1–10',
+    'Столб, клетки 4 × 2',
+    'Бочка, клетки 4 × 3 (не закрывает обзор)',
+  ]);
+  // she cannot step onto the barrel either
+  await dragOnMap(alice, cell(5, 5), cell(4, 3));
+  await expect(tokensOn(master)).toHaveText(['Алиса, клетка 5, 5']);
+
+  // the eraser takes the wall down; she can walk through the gap now
+  await tool(master, 'Ластик').click();
+  await clickMap(master, cell(6, 7));
+  await master.keyboard.press('Escape');
+  await expect(obstaclesOn(alice)).toHaveText([
+    'Столб, клетки 4 × 2',
+    'Бочка, клетки 4 × 3 (не закрывает обзор)',
+  ]);
+  await dragOnMap(alice, cell(5, 5), cell(9, 5));
+  await expect(tokensOn(master)).toHaveText(['Алиса, клетка 9, 5']);
+
+  // a selected object can be told not to hide what is behind it, and everything can be cleared at once
+  await clickMap(master, cell(4, 2));
+  await expect(master.getByText('Столб, клетки 4 × 2').first()).toBeVisible();
+  await master.getByLabel('Закрывает обзор').uncheck();
+  await expect(obstaclesOn(alice).first()).toHaveText('Столб, клетки 4 × 2 (не закрывает обзор)');
+  master.once('dialog', (d) => d.accept());
+  await master.getByRole('button', { name: /Убрать все/ }).click();
+  await expect(obstaclesOn(alice)).toHaveCount(0);
+  await expect(obstaclesOn(master)).toHaveCount(0);
+
+  // they stay gone after a reload, and a reloaded player sees the same state
+  await alice.reload();
+  await waitForMap(alice);
+  await expect(obstaclesOn(alice)).toHaveCount(0);
 });

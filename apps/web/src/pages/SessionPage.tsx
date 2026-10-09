@@ -1,8 +1,20 @@
-import { can, cellOf, displayNameSchema, type JoinError, type TokenView } from '@dnd-map/shared';
+import {
+  can,
+  cellOf,
+  describeCells,
+  displayNameSchema,
+  OBSTACLE_KINDS,
+  type ObstacleKind,
+  type Point,
+  type JoinError,
+  type TokenView,
+} from '@dnd-map/shared';
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { MapCanvas } from '../components/MapCanvas';
 import { MapControls } from '../components/MapControls';
+import { ObstaclePanel } from '../components/ObstaclePanel';
+import type { ObstacleTool } from '../components/obstacleTools';
 import { ParticipantList } from '../components/ParticipantList';
 import { CharacterPanel } from '../components/CharacterPanel';
 import { MonsterPalette, PlayersToPlace, TokenList } from '../components/TokenPanels';
@@ -10,6 +22,7 @@ import {
   useSession,
   type CharacterActions,
   type MapActions,
+  type ObstacleActions,
   isPlayerPlacement,
   monsterPlacing,
   type Placing,
@@ -40,6 +53,8 @@ export function SessionPage() {
     characterActions,
     remoteDrags,
     characterNotice,
+    obstacleActions,
+    actionNotice,
   } = useSession(inviteCode);
 
   switch (state.status) {
@@ -84,6 +99,8 @@ export function SessionPage() {
           remoteDrags={remoteDrags}
           outdated={outdated}
           characterNotice={characterNotice}
+          obstacleActions={obstacleActions}
+          actionNotice={actionNotice}
         />
       );
   }
@@ -99,6 +116,9 @@ const placeErrors: Record<string, string> = {
   already_placed: 'Ваш персонаж уже стоит на этой карте.',
   offline: 'Нет связи с сервером — действие не выполнено.',
   rate_limited: 'Слишком быстро. Подождите секунду.',
+  blocked: 'Здесь препятствие: поставить нельзя.',
+  too_many_obstacles: 'На карте уже максимум препятствий.',
+  invalid_request: 'Сюда поставить нельзя.',
 };
 
 function JoinedView({
@@ -109,7 +129,11 @@ function JoinedView({
   remoteDrags,
   outdated,
   characterNotice,
+  obstacleActions,
+  actionNotice,
 }: {
+  obstacleActions: ObstacleActions;
+  actionNotice: { text: string; nonce: number } | null;
   outdated: boolean;
   characterNotice: { text: string; nonce: number } | null;
   state: Joined;
@@ -121,6 +145,8 @@ function JoinedView({
   const [calibrating, setCalibrating] = useState(false);
   const [placing, setPlacing] = useState<Placing | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [tool, setTool] = useState<ObstacleTool | null>(null);
+  const [selectedObstacleId, setSelectedObstacleId] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ x: number; y: number; nonce: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const { world, self } = state;
@@ -141,6 +167,28 @@ function JoinedView({
   const selected = world.tokens.find((t) => t.id === selectedId) ?? null;
 
   // Without a connection nothing can be moved: a drop would only have to be taken back.
+  const selectedObstacle = world.obstacles.find((o) => o.id === selectedObstacleId) ?? null;
+
+  const pickObstacle = useCallback(
+    (obstacleId: string) => {
+      if (!isMaster) return;
+      if (tool === 'erase' && obstacleId) obstacleActions.remove(obstacleId);
+      else {
+        setSelectedObstacleId(obstacleId || null); // an empty id means "clicked on the bare map"
+        if (obstacleId) setSelectedId(null);
+      }
+    },
+    [isMaster, tool, obstacleActions],
+  );
+
+  const drawObstacle = useCallback(
+    async (kind: ObstacleKind, from: Point, to: Point) => {
+      const res = await obstacleActions.add(kind, from, to);
+      if (!res.ok) setNotice(placeErrors[res.error] ?? 'Не удалось построить.');
+    },
+    [obstacleActions],
+  );
+
   const canMove = useCallback(
     (t: TokenView) =>
       !offline &&
@@ -180,13 +228,23 @@ function JoinedView({
   // starts placing or calibrating so that the whole map can be tapped.
   const [sheetOpen, setSheetOpen] = useState(() => !currentMap || (!isMaster && !myCharacter));
   useEffect(() => {
-    if (placing || calibrating) setSheetOpen(false);
-  }, [placing, calibrating]);
+    if (placing || calibrating || tool) setSheetOpen(false);
+  }, [placing, calibrating, tool]);
+  // Starting to place something ends obstacle editing.
+  useEffect(() => {
+    if (placing) setTool(null);
+  }, [placing]);
+
+  // A reason why the last thing the user did did not work (e.g. a move into a wall).
+  useEffect(() => {
+    if (actionNotice) setNotice(actionNotice.text);
+  }, [actionNotice]);
 
   useEffect(() => {
     if (offline) {
       setPlacing(null);
       setCalibrating(false);
+      setTool(null);
     }
   }, [offline]);
 
@@ -214,6 +272,17 @@ function JoinedView({
         setPlacing(null);
         setCalibrating(false);
         setSelectedId(null);
+        setTool(null);
+        setSelectedObstacleId(null);
+      } else if (
+        (e.key === 'Delete' || e.key === 'Backspace') &&
+        !typing &&
+        isMaster &&
+        selectedObstacle
+      ) {
+        e.preventDefault();
+        obstacleActions.remove(selectedObstacle.id);
+        setSelectedObstacleId(null);
       } else if (
         (e.key === 'Delete' || e.key === 'Backspace') &&
         !typing &&
@@ -226,7 +295,7 @@ function JoinedView({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [canDelete, selected, tokenActions]);
+  }, [canDelete, isMaster, obstacleActions, selected, selectedObstacle, tokenActions]);
 
   return (
     <div className={offline ? 'session offline' : 'session'}>
@@ -256,22 +325,43 @@ function JoinedView({
                 actions.updateGrid(currentMap.id, result);
                 setCalibrating(false);
               }}
+              obstacles={{
+                list: world.obstacles,
+                selectedId: selectedObstacle?.id ?? null,
+                tool: isMaster ? tool : null,
+                stopsTokens: !isMaster,
+                onPick: pickObstacle,
+                onDraw: (kind, from, to) => void drawObstacle(kind, from, to),
+              }}
               tokens={{
                 list: world.tokens,
                 selectedId: selected?.id ?? null,
                 canMove,
                 remoteDrags,
-                onSelect: setSelectedId,
+                onSelect: (id) => {
+                  setSelectedId(id);
+                  if (id) setSelectedObstacleId(null);
+                },
                 onDrag: tokenActions.drag,
                 onMove: tokenActions.move,
               }}
-              placing={calibrating ? null : placing}
+              placing={calibrating || tool ? null : placing}
               onPlace={(spec, x, y) => void place(spec, x, y)}
               focus={focus}
             />
           ) : null}
           {currentMap ? (
             // The canvas is a picture to assistive technology; this list says what is on it.
+            <ul className="sr-only" aria-label="Препятствия">
+              {world.obstacles.map((o) => (
+                <li key={o.id}>
+                  {OBSTACLE_KINDS[o.kind].label}, клетки {describeCells(currentMap.grid, o)}
+                  {o.blocksSight ? '' : ' (не закрывает обзор)'}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {currentMap ? (
             <ul className="sr-only" aria-label="Фишки на карте" aria-live="polite">
               {world.tokens.map((t) => {
                 const { col, row } = cellOf(currentMap.grid, t);
@@ -326,8 +416,27 @@ function JoinedView({
               calibrating={calibrating}
               onCalibratingChange={(value) => {
                 setCalibrating(value);
-                if (value) setPlacing(null);
+                if (value) {
+                  setPlacing(null);
+                  setTool(null);
+                }
               }}
+            />
+          )}
+          {isMaster && currentMap && (
+            <ObstaclePanel
+              tool={tool}
+              onToolChange={(next) => {
+                setTool(next);
+                if (next) {
+                  setPlacing(null);
+                  setCalibrating(false);
+                }
+              }}
+              grid={currentMap.grid}
+              obstacles={world.obstacles}
+              selected={selectedObstacle}
+              actions={obstacleActions}
             />
           )}
           {!isMaster && (

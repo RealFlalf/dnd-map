@@ -98,3 +98,11 @@ export function recordClientTraffic(page: Page): string[] {
   );
   return frames;
 }
+
+/** The accessible list of obstacles next to the canvas: "Стена, клетки 6 × 1–10". */
+export const obstaclesOn = (page: Page) =>
+  page.getByRole('list', { name: 'Препятствия' }).getByRole('listitem');
+
+/** The master's obstacle tool buttons (wall, pillar, barrel, eraser). */
+export const tool = (page: Page, name: 'Стена' | 'Столб' | 'Бочка' | 'Ластик') =>
+  page.getByRole('group', { name: 'Инструмент' }).getByRole('button', { name });

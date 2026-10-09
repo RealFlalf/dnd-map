@@ -10,6 +10,7 @@ import {
 import { Prisma, type Map as MapRow, type PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { bumpVersion, gridOf } from '../db-utils';
+import { toObstacleView } from '../obstacles/view';
 import { toTokenView } from '../tokens/view';
 import type { ProcessedImage } from './image';
 import type { FileStorage } from './storage';
@@ -63,11 +64,18 @@ export function createMapService(prisma: PrismaClient, storage: FileStorage) {
                 orderBy: { createdAt: 'asc' },
               })
             : [];
+          const obstacles = session.currentMapId
+            ? await tx.obstacle.findMany({
+                where: { mapId: session.currentMapId },
+                orderBy: { createdAt: 'asc' },
+              })
+            : [];
           return {
             version: session.version,
             currentMapId: session.currentMapId,
             maps: session.maps.map(toView),
             tokens: tokens.map(toTokenView),
+            obstacles: obstacles.map(toObstacleView),
           };
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },

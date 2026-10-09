@@ -1,8 +1,18 @@
-import { GRID_SCALE_MAX, GRID_SCALE_MIN, type MapView, type TokenView } from '@dnd-map/shared';
+import {
+  cellsRect,
+  GRID_SCALE_MAX,
+  GRID_SCALE_MIN,
+  type MapView,
+  type ObstacleKind,
+  type ObstacleView,
+  type TokenView,
+} from '@dnd-map/shared';
 import type Konva from 'konva';
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { Image as KonvaImage, Layer, Rect, Shape, Stage } from 'react-konva';
 import { isPlayerPlacement, type Placing, type RemoteDrags } from '../session/useSession';
+import { ObstacleLayer } from './ObstacleLayer';
+import { TOOL_HINTS, type ObstacleTool } from './obstacleTools';
 import { PALETTE_MIME, parsePlacement } from './placement';
 import { TokenLayer } from './TokenLayer';
 import { useElementSize } from './useElementSize';
@@ -36,8 +46,22 @@ export interface TokensProps {
   onMove(tokenId: string, x: number, y: number): void;
 }
 
+export interface ObstaclesProps {
+  list: ObstacleView[];
+  selectedId: string | null;
+  /** What the pointer does on the map: null leaves obstacles to be picked and selected. */
+  tool: ObstacleTool | null;
+  /** Obstacles stop this viewer's tokens (players); the master is not stopped. */
+  stopsTokens: boolean;
+  /** Master: a click on an obstacle (selects it, or erases it with the eraser). */
+  onPick(obstacleId: string): void;
+  /** Master: build `kind` between two points (the server snaps it to cells). */
+  onDraw(kind: ObstacleKind, from: Point, to: Point): void;
+}
+
 interface Props {
   map: MapView;
+  obstacles: ObstaclesProps;
   tokens: TokensProps;
   /** While set, a click on the map places a token instead of selecting: a monster, or the player's own character. */
   placing: Placing | null;
@@ -61,6 +85,7 @@ const prefersPreview = () => window.matchMedia('(pointer: coarse)').matches;
 
 export function MapCanvas({
   map,
+  obstacles,
   calibrating,
   onCalibrated,
   tokens,
@@ -70,8 +95,11 @@ export function MapCanvas({
 }: Props) {
   const [container, size, containerNode] = useElementSize<HTMLDivElement>();
   const stageRef = useRef<Konva.Stage>(null);
-  const calibratingRef = useRef(calibrating);
-  calibratingRef.current = calibrating;
+  const wallTool = obstacles.tool === 'wall';
+  const [drawing, setDrawing] = useState<{ from: Point; to: Point } | null>(null);
+  // While calibrating or drawing a wall a drag draws; it must not pan the map.
+  const panLockedRef = useRef(calibrating || wallTool);
+  panLockedRef.current = calibrating || wallTool;
   const [view, setView] = useState<View>({ x: 0, y: 0, scale: 1 });
   const [selection, setSelection] = useState<{ from: Point; to: Point } | null>(null);
   const sizeRef = useRef(size);
@@ -137,18 +165,25 @@ export function MapCanvas({
     e.target.getStage()?.getRelativePointerPosition() ?? null;
 
   const onPointerDown = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
-    if (!calibrating) return;
     const p = imagePoint(e);
-    if (p) setSelection({ from: p, to: p });
+    if (!p) return;
+    if (calibrating) setSelection({ from: p, to: p });
+    else if (wallTool) setDrawing({ from: p, to: p });
   };
 
   const onPointerMove = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
-    if (!calibrating) return;
     const p = imagePoint(e);
-    if (p) setSelection((s) => (s ? { ...s, to: p } : s));
+    if (!p) return;
+    if (calibrating) setSelection((s) => (s ? { ...s, to: p } : s));
+    else if (wallTool) setDrawing((d) => (d ? { ...d, to: p } : d));
   };
 
   const onPointerUp = () => {
+    if (wallTool && drawing) {
+      obstacles.onDraw('wall', drawing.from, drawing.to);
+      setDrawing(null);
+      return;
+    }
     if (!calibrating || !selection) return;
     const width = Math.abs(selection.to.x - selection.from.x);
     const height = Math.abs(selection.to.y - selection.from.y);
@@ -165,8 +200,13 @@ export function MapCanvas({
     // Clicks on a token are handled by the token itself.
     if (calibrating || e.target !== e.target.getStage()) return;
     const p = imagePoint(e);
-    if (placing && p) onPlace(placing, p.x, p.y);
-    else tokens.onSelect(null);
+    const tool = obstacles.tool;
+    if ((tool === 'pillar' || tool === 'barrel') && p) obstacles.onDraw(tool, p, p);
+    else if (placing && p) onPlace(placing, p.x, p.y);
+    else {
+      tokens.onSelect(null);
+      obstacles.onPick('');
+    }
   };
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -241,7 +281,7 @@ export function MapCanvas({
       if (e.touches.length < 2) last = null;
       // Dragging comes back only when every finger is up, so the remaining finger of a pinch
       // does not suddenly start panning.
-      if (e.touches.length === 0) stageRef.current?.draggable(!calibratingRef.current);
+      if (e.touches.length === 0) stageRef.current?.draggable(!panLockedRef.current);
     };
 
     node.addEventListener('touchstart', onStart, { capture: true, passive: true });
@@ -264,7 +304,12 @@ export function MapCanvas({
   return (
     <div
       ref={container}
-      className={['map-canvas', calibrating && 'calibrating', placing && 'placing']
+      className={[
+        'map-canvas',
+        calibrating && 'calibrating',
+        placing && 'placing',
+        obstacles.tool && 'drawing',
+      ]
         .filter(Boolean)
         .join(' ')}
       role="img"
@@ -281,7 +326,7 @@ export function MapCanvas({
           y={view.y}
           scaleX={view.scale}
           scaleY={view.scale}
-          draggable={!calibrating}
+          draggable={!calibrating && !wallTool}
           onWheel={onWheel}
           onMouseDown={onPointerDown}
           onTouchStart={onPointerDown}
@@ -321,7 +366,15 @@ export function MapCanvas({
               </>
             )}
           </Layer>
+          <ObstacleLayer
+            obstacles={obstacles.list}
+            selectedId={obstacles.selectedId}
+            interactive={!calibrating && (obstacles.tool === null || obstacles.tool === 'erase')}
+            onPick={obstacles.onPick}
+          />
           <TokenLayer
+            obstacles={obstacles.list}
+            stopsTokens={obstacles.stopsTokens}
             tokens={tokens.list}
             grid={map.grid}
             selectedId={tokens.selectedId}
@@ -332,6 +385,7 @@ export function MapCanvas({
             onDrag={tokens.onDrag}
             onMove={tokens.onMove}
           />
+          {drawing && wallTool && <WallPreview map={map} from={drawing.from} to={drawing.to} />}
           {selection && (
             <Layer listening={false}>
               <Rect
@@ -355,6 +409,7 @@ export function MapCanvas({
         <div className="map-status error">Не удалось загрузить изображение карты.</div>
       )}
 
+      {obstacles.tool && !placing && <div className="map-hint">{TOOL_HINTS[obstacles.tool]}</div>}
       {placing && (
         <div className="map-hint">
           {placing === 'character'
@@ -412,4 +467,22 @@ function drawGrid(ctx: Konva.Context, shape: Konva.Shape, map: MapView): void {
     ctx.lineTo(right, y);
   }
   ctx.strokeShape(shape);
+}
+
+/** The cells a wall would cover if the mouse were released now. */
+function WallPreview({ map, from, to }: { map: MapView; from: Point; to: Point }) {
+  const rect = cellsRect(map, from, to);
+  if (!rect) return null;
+  return (
+    <Layer listening={false}>
+      <Rect
+        {...rect}
+        fill="rgba(74,69,64,0.55)"
+        stroke="#e08a52"
+        strokeWidth={2}
+        strokeScaleEnabled={false}
+        dash={[6, 4]}
+      />
+    </Layer>
+  );
 }

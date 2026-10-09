@@ -12,6 +12,12 @@ enum Role {
   player
 }
 
+enum ObstacleKind {
+  wall
+  pillar
+  barrel
+}
+
 enum TokenType {
   monster
   player_character
@@ -71,9 +77,10 @@ model Map {
   gridSnap    Boolean  @default(true)
   createdAt   DateTime @default(now())
 
-  session         Session  @relation("SessionMaps", fields: [sessionId], references: [id], onDelete: Cascade)
-  currentInSession Session? @relation("CurrentMap")
-  tokens          Token[]
+  session          Session    @relation("SessionMaps", fields: [sessionId], references: [id], onDelete: Cascade)
+  currentInSession Session?   @relation("CurrentMap")
+  tokens           Token[]
+  obstacles        Obstacle[]
 
   @@index([sessionId])
   @@map("maps")
@@ -99,10 +106,29 @@ model Token {
   map   Map          @relation(fields: [mapId], references: [id], onDelete: Cascade)
   owner Participant? @relation(fields: [ownerParticipantId], references: [id], onDelete: Cascade)
 
-  @@index([mapId])
   /// At most one character per player and map. Monsters have no owner, and NULLs never collide.
   @@unique([mapId, ownerParticipantId])
+  @@index([mapId])
   @@map("tokens")
+}
+
+/// A static object on a map: a wall, a pillar, a barrel. Rectangles in source-image pixels, aligned to the grid when created.
+model Obstacle {
+  id             String       @id @default(cuid())
+  mapId          String
+  kind           ObstacleKind
+  x              Float
+  y              Float
+  width          Float
+  height         Float
+  blocksMovement Boolean      @default(true)
+  blocksSight    Boolean
+  createdAt      DateTime     @default(now())
+
+  map Map @relation(fields: [mapId], references: [id], onDelete: Cascade)
+
+  @@index([mapId])
+  @@map("obstacles")
 }
 
 model EventLog {

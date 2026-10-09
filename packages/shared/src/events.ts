@@ -7,6 +7,15 @@ import type {
   SessionState,
 } from './map';
 import type {
+  ObstacleAdd,
+  ObstacleClear,
+  ObstacleRef,
+  ObstacleRemoveResult,
+  ObstacleResult,
+  ObstacleSight,
+  ObstaclesPatch,
+} from './obstacle';
+import type {
   CharacterIconRequest,
   CharacterIconResult,
   CharacterPlace,
@@ -25,7 +34,7 @@ import type { JoinRequest, JoinResult, ParticipantView } from './session';
  * Socket.IO contract shared by the server and the web client.
  * Bump PROTOCOL_VERSION on any breaking change to these events.
  */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 export interface HelloPayload {
   protocolVersion: number;
@@ -45,6 +54,8 @@ export interface ServerToClientEvents {
   'grid.changed': (change: GridChanged) => void;
   /** Change of the tokens on the current map, already filtered for the receiver's role. */
   'tokens.changed': (patch: TokensPatch) => void;
+  /** Change of the obstacles on the current map. */
+  'obstacles.changed': (patch: ObstaclesPatch) => void;
   /** Live position of a token someone is dragging right now. Not versioned, never stored. */
   'token.dragging': (drag: TokenDragging) => void;
 }
@@ -75,6 +86,14 @@ export interface ClientToServerEvents {
   ) => void;
   /** Player only: puts the player's own character on the current map (once per map). */
   'character.place': (request: CharacterPlace, ack: (res: TokenResult) => void) => void;
+  /** Master only. The server snaps the rectangle to whole grid cells. */
+  'obstacle.add': (request: ObstacleAdd, ack: (res: ObstacleResult) => void) => void;
+  /** Master only. */
+  'obstacle.remove': (request: ObstacleRef, ack: (res: ObstacleRemoveResult) => void) => void;
+  /** Master only: whether the obstacle blocks the line of sight. */
+  'obstacle.setSight': (request: ObstacleSight, ack: (res: ObstacleResult) => void) => void;
+  /** Master only: removes every obstacle of the map. */
+  'obstacle.clear': (request: ObstacleClear, ack: (res: ObstacleRemoveResult) => void) => void;
   /** Intermediate position while dragging; fire and forget, send at most ~20 times per second. */
   'token.drag': (request: TokenMove) => void;
 }

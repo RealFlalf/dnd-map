@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ObstacleView } from './obstacle';
 import type { TokenView } from './token';
 
 export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -37,6 +38,8 @@ export interface SessionState {
   maps: MapView[];
   /** Tokens on the current map, as the receiving role may see them (players never get hidden monsters). */
   tokens: TokenView[];
+  /** Obstacles on the current map. */
+  obstacles: ObstacleView[];
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -85,6 +88,10 @@ export type ActionError =
   | 'too_many_tokens'
   | 'already_placed'
   | 'participant_not_found'
+  | 'obstacle_not_found'
+  | 'too_many_obstacles'
+  /** The move would end in an obstacle or cross one. */
+  | 'blocked'
   /** Too many requests from this connection; slow down. */
   | 'rate_limited'
   /** Produced by the client itself when there is no connection; the server never sends it. */

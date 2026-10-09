@@ -1,12 +1,18 @@
 import {
   applyGridUpdate,
+  canMove,
   placeToken,
+  tokenRadius,
   PROTOCOL_VERSION,
   type ActionResult,
   type GridChanged,
   type GridUpdate,
   type JoinError,
   type JoinRequest,
+  type ObstacleKind,
+  type ObstaclesPatch,
+  type ObstacleView,
+  type Point,
   type ParticipantView,
   type SessionState as WorldState,
   type TokenDragging,
@@ -67,6 +73,14 @@ export const isPlayerPlacement = (placing: Placing | null): placing is PlayerPla
 export const monsterPlacing = (placing: Placing | null): PlacementSpec | null =>
   typeof placing === 'object' && placing !== null && 'icon' in placing ? placing : null;
 
+export interface ObstacleActions {
+  /** The server snaps the rectangle between the two points to whole cells. */
+  add(kind: ObstacleKind, from: Point, to: Point): Promise<ActionResult>;
+  remove(obstacleId: string): void;
+  setSight(obstacleId: string, blocksSight: boolean): void;
+  clear(): Promise<ActionResult>;
+}
+
 export interface TokenActions {
   create(spec: PlacementSpec, x: number, y: number): Promise<ActionResult>;
   /** Puts a character on the current map: the player's own, or (master) the given player's. */
@@ -105,6 +119,17 @@ const applyTokensPatch = (tokens: TokenView[], patch: TokensPatch): TokenView[] 
   return next;
 };
 
+const applyObstaclesPatch = (list: ObstacleView[], patch: ObstaclesPatch): ObstacleView[] => {
+  const removed = new Set(patch.removedIds);
+  const next = list.filter((o) => !removed.has(o.id));
+  for (const obstacle of patch.upserted) {
+    const at = next.findIndex((o) => o.id === obstacle.id);
+    if (at >= 0) next[at] = obstacle;
+    else next.push(obstacle);
+  }
+  return next;
+};
+
 /**
  * Connects to a session and keeps the membership alive across reconnects:
  * every (re)connect re-sends `session.join` with the stored participant key.
@@ -126,6 +151,9 @@ export function useSession(rawInviteCode: string) {
   }>({ mapId: '', pending: null, timer: null });
   /** Who I am (set on join); used to recognise changes to my own character made by someone else. */
   const selfId = useRef<string | null>(null);
+  const selfRole = useRef<'master' | 'player' | null>(null);
+  /** Why something the user just did did not work (a move into a wall, ...). */
+  const [actionNotice, setActionNotice] = useState<{ text: string; nonce: number } | null>(null);
   const [characterNotice, setCharacterNotice] = useState<{ text: string; nonce: number } | null>(
     null,
   );
@@ -180,6 +208,7 @@ export function useSession(rawInviteCode: string) {
       const key = result.participantKey ?? ('key' in req ? req.key : undefined);
       if (key) request.current = { inviteCode: result.inviteCode, key };
       selfId.current = result.self.id;
+      selfRole.current = result.self.role;
       worldRef.current = result.state;
       forgetRemoteDrags();
       setState({
@@ -282,6 +311,16 @@ export function useSession(rawInviteCode: string) {
       });
       forgetRemoteDrags([...patch.upserted.map((t) => t.id), ...patch.removedIds]);
     };
+    const onObstaclesChanged = (patch: ObstaclesPatch) => {
+      const world = worldRef.current;
+      if (!world || patch.version <= world.version) return;
+      if (patch.version > world.version + 1) return void resync();
+      applyWorld({
+        ...world,
+        version: patch.version,
+        obstacles: applyObstaclesPatch(world.obstacles, patch),
+      });
+    };
     const onTokenDragging = ({ tokenId, x, y }: TokenDragging) => {
       setRemoteDrags((drags) => ({ ...drags, [tokenId]: { x, y } }));
       clearTimeout(timers.get(tokenId));
@@ -300,6 +339,7 @@ export function useSession(rawInviteCode: string) {
     socket.on('state.snapshot', onSnapshot);
     socket.on('grid.changed', onGridChanged);
     socket.on('tokens.changed', onTokensChanged);
+    socket.on('obstacles.changed', onObstaclesChanged);
     socket.on('token.dragging', onTokenDragging);
 
     findSession(rawInviteCode)
@@ -333,6 +373,7 @@ export function useSession(rawInviteCode: string) {
       socket.off('state.snapshot', onSnapshot);
       socket.off('grid.changed', onGridChanged);
       socket.off('tokens.changed', onTokensChanged);
+      socket.off('obstacles.changed', onObstaclesChanged);
       socket.off('token.dragging', onTokenDragging);
       socket.disconnect();
     };
@@ -496,11 +537,30 @@ export function useSession(rawInviteCode: string) {
           });
           return;
         }
+        const token = world.tokens.find((t) => t.id === tokenId);
+        if (token && selfRole.current !== 'master') {
+          const to = placeToken(map, token.size, { x, y });
+          if (!canMove(token, to, tokenRadius(map.grid, token.size), world.obstacles).ok) {
+            // The server would say no as well: do not even ask, and put the token back at once.
+            applyWorld({
+              ...world,
+              tokens: world.tokens.map((t) => (t.id === tokenId ? { ...t } : t)),
+            });
+            setActionNotice({ text: 'Туда не пройти: мешает препятствие', nonce: Date.now() });
+            return;
+          }
+        }
         edit(tokenId, (t) => ({ ...t, ...placeToken(map, t.size, { x, y }) }));
         socket
           .timeout(5000)
           .emitWithAck('token.move', { tokenId, x, y })
-          .then((res) => (res.ok ? confirm(res.version, replace(res.token)) : resync()))
+          .then((res) => {
+            if (res.ok) return confirm(res.version, replace(res.token));
+            if (res.error === 'blocked') {
+              setActionNotice({ text: 'Туда не пройти: мешает препятствие', nonce: Date.now() });
+            }
+            return resync();
+          })
           .catch(() => resync());
       },
 
@@ -530,6 +590,83 @@ export function useSession(rawInviteCode: string) {
           .emitWithAck('token.setVisibility', { tokenId, visible })
           .then((res) => (res.ok ? confirm(res.version, replace(res.token)) : resync()))
           .catch(() => resync());
+      },
+    };
+  }, [applyWorld, resync]);
+
+  const obstacleActions = useMemo<ObstacleActions>(() => {
+    /** Applies the server's version of the obstacles; a gap in versions means a missed update. */
+    const confirm = (version: number, change: (list: ObstacleView[]) => ObstacleView[]) => {
+      const world = worldRef.current;
+      if (!world) return;
+      if (version > world.version + 1) return void resync();
+      applyWorld({
+        ...world,
+        version: Math.max(world.version, version),
+        obstacles: change(world.obstacles),
+      });
+    };
+    const upsert = (o: ObstacleView) => (list: ObstacleView[]) =>
+      applyObstaclesPatch(list, { version: 0, upserted: [o], removedIds: [] });
+    /** Optimistic local edit of one obstacle. */
+    const editLocal = (id: string, change: (o: ObstacleView) => ObstacleView | null) => {
+      const world = worldRef.current;
+      if (!world) return;
+      applyWorld({
+        ...world,
+        obstacles: world.obstacles.flatMap((o) => (o.id === id ? (change(o) ?? []) : [o])),
+      });
+    };
+
+    return {
+      async add(kind, from, to) {
+        if (!socket.connected) return { ok: false, error: 'offline' };
+        const world = worldRef.current;
+        if (!world?.currentMapId) return { ok: false, error: 'map_not_found' };
+        try {
+          const res = await socket
+            .timeout(5000)
+            .emitWithAck('obstacle.add', { mapId: world.currentMapId, kind, from, to });
+          if (res.ok) confirm(res.version, upsert(res.obstacle));
+          return res;
+        } catch {
+          return { ok: false, error: 'internal' };
+        }
+      },
+
+      remove(obstacleId) {
+        if (!socket.connected) return;
+        editLocal(obstacleId, () => null);
+        socket
+          .timeout(5000)
+          .emitWithAck('obstacle.remove', { obstacleId })
+          .then((res) => (res.ok ? confirm(res.version, (list) => list) : resync()))
+          .catch(() => resync());
+      },
+
+      setSight(obstacleId, blocksSight) {
+        if (!socket.connected) return;
+        editLocal(obstacleId, (o) => ({ ...o, blocksSight }));
+        socket
+          .timeout(5000)
+          .emitWithAck('obstacle.setSight', { obstacleId, blocksSight })
+          .then((res) => (res.ok ? confirm(res.version, (list) => list) : resync()))
+          .catch(() => resync());
+      },
+
+      async clear() {
+        if (!socket.connected) return { ok: false, error: 'offline' };
+        const world = worldRef.current;
+        if (!world?.currentMapId) return { ok: false, error: 'map_not_found' };
+        try {
+          const res = await socket
+            .timeout(5000)
+            .emitWithAck('obstacle.clear', { mapId: world.currentMapId });
+          if (res.ok) confirm(res.version, () => []);
+          return res;
+        } catch {
+          return { ok: false, error: 'internal' };
+        }
       },
     };
   }, [applyWorld, resync]);
@@ -564,5 +701,7 @@ export function useSession(rawInviteCode: string) {
     characterActions,
     remoteDrags,
     characterNotice,
+    obstacleActions,
+    actionNotice,
   };
 }

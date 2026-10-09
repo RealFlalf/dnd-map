@@ -3,7 +3,10 @@ import {
   defaultCharacterIcon,
   MAX_TOKENS_PER_MAP,
   MONSTER_ICONS,
+  canMove,
+  canStandAt,
   placeToken,
+  tokenRadius,
   type CharacterPlace,
   type Point,
   type TokenCreate,
@@ -12,6 +15,7 @@ import {
 import { Prisma, type Map as MapRow, type PrismaClient, type Token } from '@prisma/client';
 import { bumpVersion, gridOf, logEvent, type Tx } from '../db-utils';
 import type { TokenChange } from './patch';
+import { toObstacleView } from '../obstacles/view';
 import { toTokenView } from './view';
 
 type Failure =
@@ -20,13 +24,20 @@ type Failure =
   | 'map_not_found'
   | 'forbidden'
   | 'too_many_tokens'
-  | 'already_placed';
+  | 'already_placed'
+  | 'blocked';
 export type TokenOutcome = { ok: true; change: TokenChange } | { ok: false; error: Failure };
 
 /** Decides inside the transaction whether the actor may touch the token (it is loaded fresh). */
 export type Guard = (token: TokenView) => boolean;
 
 export type TokenService = ReturnType<typeof createTokenService>;
+
+/** Obstacles stop players; the master is the referee and may put tokens anywhere. */
+export interface MoveOptions {
+  ignoreObstacles: boolean;
+}
+const NO_EXEMPTION: MoveOptions = { ignoreObstacles: false };
 
 const fail = (error: Failure): TokenOutcome => ({ ok: false, error });
 
@@ -57,6 +68,24 @@ export function createTokenService(prisma: PrismaClient) {
     change: { version, token: toTokenView(row), wasVisible, removed },
   });
 
+  /**
+   * Whether obstacles stop this token: it may not end in one or cross one on the way. `from` is
+   * the current position of a token that is moving, absent for a token that is being put on the map.
+   */
+  async function obstructed(
+    tx: Tx,
+    map: MapRow,
+    size: number,
+    from: Point | null,
+    to: Point,
+  ): Promise<boolean> {
+    const rows = await tx.obstacle.findMany({ where: { mapId: map.id, blocksMovement: true } });
+    if (rows.length === 0) return false;
+    const obstacles = rows.map(toObstacleView);
+    const radius = tokenRadius(gridOf(map), size);
+    return !(from ? canMove(from, to, radius, obstacles) : canStandAt(to, radius, obstacles)).ok;
+  }
+
   return {
     /** For relaying drags: the token as it is now, or null if it does not exist on the current map. */
     async find(sessionId: string, tokenId: string): Promise<TokenView | null> {
@@ -69,6 +98,7 @@ export function createTokenService(prisma: PrismaClient) {
       sessionId: string,
       participantId: string,
       req: TokenCreate,
+      options: MoveOptions = NO_EXEMPTION,
     ): Promise<TokenOutcome> {
       return prisma.$transaction(async (tx) => {
         const session = await tx.session.findUniqueOrThrow({
@@ -92,6 +122,9 @@ export function createTokenService(prisma: PrismaClient) {
           .map((t) => Number(/(\d+)$/.exec(t.name)?.[1] ?? 0));
         const size = req.size ?? 1;
         const at = placeToken(mapBox(map), size, { x: req.x, y: req.y });
+        if (!options.ignoreObstacles && (await obstructed(tx, map, size, null, at))) {
+          return fail('blocked');
+        }
 
         const row = await tx.token.create({
           data: {
@@ -126,6 +159,7 @@ export function createTokenService(prisma: PrismaClient) {
       actorId: string,
       ownerId: string,
       req: CharacterPlace,
+      options: MoveOptions = NO_EXEMPTION,
     ): Promise<TokenOutcome> {
       // The check below gives the usual answer; the unique index on (map, owner) is what actually
       // stops two simultaneous requests (e.g. one tap delivered twice) from both getting through.
@@ -150,6 +184,9 @@ export function createTokenService(prisma: PrismaClient) {
           if (onMap.length >= MAX_TOKENS_PER_MAP) return fail('too_many_tokens');
 
           const at = placeToken(mapBox(map), 1, { x: req.x, y: req.y });
+          if (!options.ignoreObstacles && (await obstructed(tx, map, 1, null, at))) {
+            return fail('blocked');
+          }
           const row = await tx.token.create({
             data: {
               mapId: map.id,
@@ -187,6 +224,7 @@ export function createTokenService(prisma: PrismaClient) {
       tokenId: string,
       to: Point,
       guard: Guard,
+      options: MoveOptions = NO_EXEMPTION,
     ): Promise<TokenOutcome> {
       return prisma.$transaction(async (tx) => {
         const row = await load(tx, sessionId, tokenId);
@@ -194,6 +232,12 @@ export function createTokenService(prisma: PrismaClient) {
         if (!guard(toTokenView(row))) return fail('forbidden');
 
         const at = placeToken(mapBox(row.map), row.size, to);
+        if (
+          !options.ignoreObstacles &&
+          (await obstructed(tx, row.map, row.size, { x: row.x, y: row.y }, at))
+        ) {
+          return fail('blocked');
+        }
         const updated = await tx.token.update({
           where: { id: row.id },
           data: { x: at.x, y: at.y },

@@ -1,4 +1,11 @@
-import type { GridSettings, TokenView } from '@dnd-map/shared';
+import {
+  canMove as canTravel,
+  snapToGrid,
+  tokenRadius,
+  type GridSettings,
+  type ObstacleView,
+  type TokenView,
+} from '@dnd-map/shared';
 import Konva from 'konva';
 import { memo, useCallback, useEffect, useRef } from 'react';
 import { Circle, Group, Image as KonvaImage, Layer, Text } from 'react-konva';
@@ -16,6 +23,9 @@ interface Props {
   /** Whether the viewer may move this token; decided by the same rules the server enforces. */
   canMove(token: TokenView): boolean;
   remoteDrags: RemoteDrags;
+  /** Obstacles and whether they stop this viewer (players are stopped, the master is not). */
+  obstacles: ObstacleView[];
+  stopsTokens: boolean;
   /** False while the grid is being calibrated: tokens must not react then. */
   interactive: boolean;
   onSelect(tokenId: string): void;
@@ -48,6 +58,8 @@ const TokenNode = memo(function TokenNode({
   grid,
   selectedId,
   canMove,
+  obstacles,
+  stopsTokens,
   onSelect,
   onDrag,
   onMove,
@@ -56,6 +68,8 @@ const TokenNode = memo(function TokenNode({
   'tokens' | 'remoteDrags' | 'interactive'
 >) {
   const group = useRef<Konva.Group>(null);
+  const outline = useRef<Konva.Circle>(null);
+  const outlineColor = token.visible ? '#ffffff' : '#e8e0d0';
   const tween = useRef<Konva.Tween | null>(null);
   // Position is owned by Konva (dragging) and by the tween below, not by React props, so it is
   // given once at mount; later changes are animated instead of jumping.
@@ -118,8 +132,19 @@ const TokenNode = memo(function TokenNode({
         tween.current?.destroy();
         onSelect(token.id);
       }}
-      onDragMove={(e) => onDrag(token.id, e.target.x(), e.target.y())}
-      onDragEnd={(e) => onMove(token.id, e.target.x(), e.target.y())}
+      onDragMove={(e) => {
+        onDrag(token.id, e.target.x(), e.target.y());
+        if (!stopsTokens) return;
+        // Shows at once whether this drop would be refused: the outline turns red.
+        const raw = { x: e.target.x(), y: e.target.y() };
+        const to = grid.snap ? snapToGrid(grid, token.size, raw) : raw;
+        const free = canTravel(token, to, tokenRadius(grid, token.size), obstacles).ok;
+        outline.current?.stroke(free ? outlineColor : '#e53935');
+      }}
+      onDragEnd={(e) => {
+        outline.current?.stroke(outlineColor);
+        onMove(token.id, e.target.x(), e.target.y());
+      }}
     >
       {selected && (
         <Circle radius={radius + 5} stroke="#e08a52" strokeWidth={3} strokeScaleEnabled={false} />
@@ -127,9 +152,10 @@ const TokenNode = memo(function TokenNode({
       {/* A offset dark disc instead of a blurred shadow: blurring costs a lot on every frame. */}
       <Circle x={2} y={3} radius={radius} fill="rgba(0,0,0,0.35)" listening={false} />
       <Circle
+        ref={outline}
         radius={radius}
         fill={face.kind === 'emoji' ? face.color : '#6b665e'}
-        stroke={token.visible ? '#ffffff' : '#e8e0d0'}
+        stroke={outlineColor}
         strokeWidth={2}
         strokeScaleEnabled={false}
         dash={token.visible ? undefined : [6, 4]}
