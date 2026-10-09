@@ -1,0 +1,19 @@
+# Caddy gets and renews the HTTPS certificate for $DOMAIN on its own (ports 80 and 443 must be open).
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Uploads are limited by the app (15 MB maps); this only stops anything far larger early.
+	request_body {
+		max_size 20MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	# WebSocket upgrades for /socket.io are proxied automatically.
+	reverse_proxy app:3000
+}

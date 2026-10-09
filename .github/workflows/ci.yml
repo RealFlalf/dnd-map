@@ -37,3 +37,58 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: dnd_map
+          POSTGRES_PASSWORD: dnd_map
+          POSTGRES_DB: dnd_map_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dnd_map"
+          --health-interval 5s
+          --health-retries 10
+    env:
+      E2E_DATABASE_URL: postgresql://dnd_map:dnd_map@localhost:5432/dnd_map_e2e?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: test-results/
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose file is valid
+        run: docker compose -f deploy/docker-compose.yml config --quiet
+        env:
+          DOMAIN: example.com
+          POSTGRES_PASSWORD: ci-only
+      - name: Image builds
+        run: docker build -t dnd-map:ci .
+      - name: Image starts and applies migrations
+        run: |
+          docker network create ci
+          docker run -d --name db --network ci -e POSTGRES_USER=dnd_map -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=dnd_map postgres:15-alpine
+          for i in $(seq 1 30); do docker exec db pg_isready -U dnd_map && break; sleep 1; done
+          docker run -d --name app --network ci -p 3000:3000 -e DATABASE_URL=postgresql://dnd_map:ci@db:5432/dnd_map dnd-map:ci
+          for i in $(seq 1 60); do curl -fs http://127.0.0.1:3000/api/health && break; sleep 1; done
+          curl -fs http://127.0.0.1:3000/api/health
+          curl -fs http://127.0.0.1:3000/s/ABCD2345 | grep -q 'id="root"'
+          docker logs app

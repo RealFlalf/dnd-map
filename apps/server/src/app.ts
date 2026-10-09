@@ -1,4 +1,6 @@
+import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
+import path from 'node:path';
 import { Server } from 'socket.io';
 import { registerCharacterRoutes } from './characters/routes';
 import { createCharacterService } from './characters/service';
@@ -7,6 +9,7 @@ import type { Db } from './db';
 import { registerMapRoutes } from './maps/routes';
 import { createMapService } from './maps/service';
 import { createLocalStorage } from './maps/storage';
+import { runCleanup } from './maintenance/cleanup';
 import { createHttpLimiter, type HttpRuleName } from './rate-limit';
 import { registerRealtime, type IoServer } from './realtime';
 import { registerSessionRoutes } from './sessions/routes';
@@ -67,6 +70,33 @@ export async function buildApp({ config, db }: AppDeps) {
   });
   registerSessionRoutes(app, sessions);
 
+  // Production: one process serves the API, the realtime connection and the web app.
+  if (config.WEB_DIST_DIR) {
+    await app.register(fastifyStatic, {
+      root: path.resolve(config.WEB_DIST_DIR),
+      wildcard: false,
+      setHeaders(reply, filePath) {
+        // Built assets have content hashes in their names; index.html must always be fresh.
+        const immutable = filePath.includes(`${path.sep}assets${path.sep}`);
+        reply.header(
+          'Cache-Control',
+          immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+        );
+      },
+    });
+    // Client-side routes (/s/ABCD2345) all load the same page.
+    app.setNotFoundHandler((req, reply) => {
+      if (
+        req.method === 'GET' &&
+        !req.url.startsWith('/api/') &&
+        !req.url.startsWith('/socket.io')
+      ) {
+        return reply.header('Cache-Control', 'no-cache').sendFile('index.html');
+      }
+      return reply.code(404).send({ error: 'not_found' });
+    });
+  }
+
   const io: IoServer = new Server(app.server, {
     cors: { origin: config.CORS_ORIGIN },
     maxHttpBufferSize: MAX_SOCKET_MESSAGE_BYTES,
@@ -83,6 +113,48 @@ export async function buildApp({ config, db }: AppDeps) {
   });
   registerMapRoutes(app, { sessions, maps, storage, realtime });
   registerCharacterRoutes(app, { sessions, characters, storage, realtime });
+
+  // Numbers for monitoring; nothing in here identifies a session or a person.
+  const startedAt = Date.now();
+  app.get('/api/metrics', async () => {
+    const sockets = await io.fetchSockets();
+    const sessionsOnline = new Set(sockets.flatMap((s) => s.data.session?.sessionId ?? []));
+    return {
+      uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+      connections: sockets.length,
+      sessionsOnline: sessionsOnline.size,
+      memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    };
+  });
+
+  // Periodic cleanup of expired sessions and orphaned files. The first run waits a minute so a
+  // restart is not slowed down; runs never overlap.
+  let cleanupTimer: NodeJS.Timeout | undefined;
+  let cleanupRunning: Promise<void> | null = null;
+  if (config.CLEANUP_INTERVAL_MINUTES > 0) {
+    const cleanup = () => {
+      if (cleanupRunning) return;
+      cleanupRunning = runCleanup(db.prisma, storage, {
+        sessionTtlMs: config.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
+        orphanGraceMs: 60 * 60 * 1000,
+        isActive: async (sessionId) => (await io.in(sessionId).fetchSockets()).length > 0,
+      })
+        .then((report) => app.log.info(report, 'cleanup finished'))
+        .catch((err: unknown) => app.log.error(err, 'cleanup failed'))
+        .finally(() => (cleanupRunning = null));
+    };
+    const first = setTimeout(() => {
+      cleanup();
+      cleanupTimer = setInterval(cleanup, config.CLEANUP_INTERVAL_MINUTES * 60 * 1000);
+      cleanupTimer.unref();
+    }, 60 * 1000);
+    first.unref();
+    app.addHook('onClose', async () => {
+      clearTimeout(first);
+      clearInterval(cleanupTimer);
+      await cleanupRunning;
+    });
+  }
 
   // Open websockets would otherwise keep the HTTP server from closing.
   app.addHook('preClose', async () => {

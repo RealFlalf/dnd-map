@@ -8,6 +8,12 @@ const envSchema = z.object({
   UPLOADS_DIR: z.string().default('uploads'),
   /** Per-connection and per-address request limits; turn off only for tests. */
   RATE_LIMIT: z.enum(['on', 'off']).default('on'),
+  /** Built web client (apps/web/dist). When set, the server also serves the web app itself. */
+  WEB_DIST_DIR: z.string().optional(),
+  /** Sessions nobody has touched for this many days are deleted with their files. */
+  SESSION_TTL_DAYS: z.coerce.number().positive().default(30),
+  /** How often the cleanup runs; 0 switches it off (tests). */
+  CLEANUP_INTERVAL_MINUTES: z.coerce.number().min(0).default(60),
   /** Set to 'true' behind a reverse proxy so limits use the real client address. */
   TRUST_PROXY: z.enum(['true', 'false']).default('false'),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),

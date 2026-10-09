@@ -113,8 +113,7 @@ const TokenNode = memo(function TokenNode({
       // Without this the press would also start panning the map (the stage is draggable too).
       onMouseDown={(e) => void (e.cancelBubble = true)}
       onTouchStart={(e) => void (e.cancelBubble = true)}
-      onClick={() => onSelect(token.id)}
-      onTap={() => onSelect(token.id)}
+      onPointerClick={() => onSelect(token.id)}
       onDragStart={() => {
         tween.current?.destroy();
         onSelect(token.id);

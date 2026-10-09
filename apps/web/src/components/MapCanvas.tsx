@@ -161,7 +161,7 @@ export function MapCanvas({
     onCalibrated({ scale, offsetX: left, offsetY: top });
   };
 
-  const onStageClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+  const onStageClick = (e: Konva.KonvaEventObject<PointerEvent>) => {
     // Clicks on a token are handled by the token itself.
     if (calibrating || e.target !== e.target.getStage()) return;
     const p = imagePoint(e);
@@ -289,8 +289,9 @@ export function MapCanvas({
           onTouchMove={onPointerMove}
           onMouseUp={onPointerUp}
           onTouchEnd={onPointerUp}
-          onClick={onStageClick}
-          onTap={onStageClick}
+          // One pointer event for mouse and touch: a tap also produces a compatibility click,
+          // and listening to both placed every token twice on phones.
+          onPointerClick={onStageClick}
           onDragEnd={(e) => {
             // Only the stage's own drag (not a child's) moves the view.
             if (e.target === e.target.getStage()) {

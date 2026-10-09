@@ -1,4 +1,4 @@
-import { can, displayNameSchema, type JoinError, type TokenView } from '@dnd-map/shared';
+import { can, cellOf, displayNameSchema, type JoinError, type TokenView } from '@dnd-map/shared';
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { MapCanvas } from '../components/MapCanvas';
@@ -239,6 +239,20 @@ function JoinedView({
               onPlace={(spec, x, y) => void place(spec, x, y)}
               focus={focus}
             />
+          ) : null}
+          {currentMap ? (
+            // The canvas is a picture to assistive technology; this list says what is on it.
+            <ul className="sr-only" aria-label="Фишки на карте" aria-live="polite">
+              {world.tokens.map((t) => {
+                const { col, row } = cellOf(currentMap.grid, t);
+                return (
+                  <li key={t.id} data-token-id={t.id}>
+                    {t.name}, клетка {col}, {row}
+                    {t.visible ? '' : ' (скрыт от игроков)'}
+                  </li>
+                );
+              })}
+            </ul>
           ) : (
             <p className="muted map-placeholder">
               {isMaster

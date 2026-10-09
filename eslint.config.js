@@ -4,11 +4,21 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', 'apps/server/uploads/**'] },
+  {
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/coverage/**',
+      'apps/server/uploads/**',
+      'e2e/.uploads/**',
+      'test-results/**',
+      'playwright-report/**',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['apps/server/**/*.ts', 'packages/**/*.ts', '*.js'],
+    files: ['apps/server/**/*.ts', 'packages/**/*.ts', 'e2e/**/*.ts', 'scripts/**/*.ts', '*.js'],
     languageOptions: { globals: globals.node },
   },
   {

@@ -25,6 +25,8 @@ export const testConfig: Config = {
   DATABASE_URL: process.env.DATABASE_URL!,
   UPLOADS_DIR: path.join(tmpdir(), 'dnd-map-test-uploads'),
   RATE_LIMIT: 'off',
+  SESSION_TTL_DAYS: 30,
+  CLEANUP_INTERVAL_MINUTES: 0,
   TRUST_PROXY: 'false',
   CORS_ORIGIN: 'http://localhost:5173',
 };

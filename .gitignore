@@ -8,3 +8,8 @@ coverage/
 apps/server/uploads/
 .DS_Store
 .claude/settings.local.json
+e2e/.uploads/
+test-results/
+playwright-report/
+deploy/.env
+deploy/backups/

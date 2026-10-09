@@ -9,7 +9,7 @@ import {
   type TokenCreate,
   type TokenView,
 } from '@dnd-map/shared';
-import type { Map as MapRow, PrismaClient, Token } from '@prisma/client';
+import { Prisma, type Map as MapRow, type PrismaClient, type Token } from '@prisma/client';
 import { bumpVersion, gridOf, logEvent, type Tx } from '../db-utils';
 import type { TokenChange } from './patch';
 import { toTokenView } from './view';
@@ -118,48 +118,57 @@ export function createTokenService(prisma: PrismaClient) {
       participantId: string,
       req: CharacterPlace,
     ): Promise<TokenOutcome> {
-      return prisma.$transaction(async (tx) => {
-        const session = await tx.session.findUniqueOrThrow({
-          where: { id: sessionId },
-          select: { currentMapId: true },
-        });
-        if (session.currentMapId !== req.mapId) return fail('map_not_found');
-        const map = await tx.map.findUniqueOrThrow({ where: { id: req.mapId } });
-        const player = await tx.participant.findFirstOrThrow({
-          where: { id: participantId, sessionId },
-        });
+      // The check below gives the usual answer; the unique index on (map, owner) is what actually
+      // stops two simultaneous requests (e.g. one tap delivered twice) from both getting through.
+      return prisma
+        .$transaction(async (tx) => {
+          const session = await tx.session.findUniqueOrThrow({
+            where: { id: sessionId },
+            select: { currentMapId: true },
+          });
+          if (session.currentMapId !== req.mapId) return fail('map_not_found');
+          const map = await tx.map.findUniqueOrThrow({ where: { id: req.mapId } });
+          const player = await tx.participant.findFirstOrThrow({
+            where: { id: participantId, sessionId },
+          });
 
-        const onMap = await tx.token.findMany({
-          where: { mapId: map.id },
-          select: { ownerParticipantId: true },
-        });
-        if (onMap.some((t) => t.ownerParticipantId === participantId))
-          return fail('already_placed');
-        if (onMap.length >= MAX_TOKENS_PER_MAP) return fail('too_many_tokens');
+          const onMap = await tx.token.findMany({
+            where: { mapId: map.id },
+            select: { ownerParticipantId: true },
+          });
+          if (onMap.some((t) => t.ownerParticipantId === participantId))
+            return fail('already_placed');
+          if (onMap.length >= MAX_TOKENS_PER_MAP) return fail('too_many_tokens');
 
-        const at = placeToken(mapBox(map), 1, { x: req.x, y: req.y });
-        const row = await tx.token.create({
-          data: {
-            mapId: map.id,
+          const at = placeToken(mapBox(map), 1, { x: req.x, y: req.y });
+          const row = await tx.token.create({
+            data: {
+              mapId: map.id,
+              type: 'player_character',
+              ownerParticipantId: participantId,
+              name: player.displayName,
+              iconUrl: player.iconUrl ?? defaultCharacterIcon(player.id),
+              x: at.x,
+              y: at.y,
+              size: 1,
+              visibleToPlayers: true,
+            },
+          });
+          const { version } = await bumpVersion(tx, sessionId);
+          await logEvent(tx, sessionId, participantId, 'token.create', {
+            tokenId: row.id,
+            name: row.name,
             type: 'player_character',
-            ownerParticipantId: participantId,
-            name: player.displayName,
-            iconUrl: player.iconUrl ?? defaultCharacterIcon(player.id),
-            x: at.x,
-            y: at.y,
-            size: 1,
-            visibleToPlayers: true,
-          },
+            at: { x: at.x, y: at.y },
+          });
+          return changeOf(version, row, false);
+        })
+        .catch((err: unknown) => {
+          if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+            return fail('already_placed');
+          }
+          throw err;
         });
-        const { version } = await bumpVersion(tx, sessionId);
-        await logEvent(tx, sessionId, participantId, 'token.create', {
-          tokenId: row.id,
-          name: row.name,
-          type: 'player_character',
-          at: { x: at.x, y: at.y },
-        });
-        return changeOf(version, row, false);
-      });
     },
 
     async move(

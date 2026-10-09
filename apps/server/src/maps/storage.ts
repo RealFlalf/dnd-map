@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 
@@ -28,6 +28,8 @@ export interface FileStorage {
   /** Missing files are ignored. */
   remove(name: string): Promise<void>;
   open(name: string): Promise<StoredFile | null>;
+  /** Every stored file with its last modification time (used by the cleanup job). */
+  list(): Promise<Array<{ name: string; modifiedAt: Date }>>;
 }
 
 export function createLocalStorage(dir: string): FileStorage {
@@ -65,6 +67,25 @@ export function createLocalStorage(dir: string): FileStorage {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
         throw err;
       }
+    },
+
+    async list() {
+      let names: string[];
+      try {
+        names = await readdir(root);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw err;
+      }
+      const files = await Promise.all(
+        names
+          .filter((name) => FILE_NAME_PATTERN.test(name))
+          .map(async (name) => {
+            const info = await stat(path.join(root, name)).catch(() => null);
+            return info?.isFile() ? { name, modifiedAt: info.mtime } : null;
+          }),
+      );
+      return files.filter((f) => f !== null);
     },
   };
 }

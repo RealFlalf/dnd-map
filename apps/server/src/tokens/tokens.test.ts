@@ -387,6 +387,38 @@ describe('token.drag', () => {
     expect([stored.x, stored.y]).toEqual([105, 105]);
   });
 
+  it('stops relaying to players the moment a monster is hidden, even right after a drag', async () => {
+    const ctx = await setup();
+    const { token } = await place(ctx);
+    const player = recordTraffic(ctx.playerSocket);
+    const seen = waitFor(ctx.playerSocket, 'token.dragging');
+    ctx.masterSocket.emit('token.drag', { tokenId: token.id, x: 150, y: 150 }); // now known to the relay
+    await seen;
+
+    await emitAck(ctx.masterSocket, 'token.setVisibility', { tokenId: token.id, visible: false });
+    const mark = player.mark();
+    for (let i = 0; i < 5; i++)
+      ctx.masterSocket.emit('token.drag', { tokenId: token.id, x: 200 + i, y: 150 });
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(player.since(mark)).not.toContain('token.dragging');
+  });
+
+  it('stops relaying drags of a token whose map is no longer shown', async () => {
+    const ctx = await setup();
+    const { token } = await place(ctx);
+    const seen = waitFor(ctx.playerSocket, 'token.dragging');
+    ctx.masterSocket.emit('token.drag', { tokenId: token.id, x: 150, y: 150 });
+    await seen;
+
+    await uploadMap(server, ctx.inviteCode, ctx.masterKey, await pngImage(200, 200));
+    const player = recordTraffic(ctx.playerSocket);
+    ctx.masterSocket.emit('token.drag', { tokenId: token.id, x: 160, y: 150 });
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(player.since(0)).not.toContain('token.dragging');
+  });
+
   it('is not relayed from players, nor for tokens they may not move', async () => {
     const ctx = await setup();
     const { token } = await place(ctx);

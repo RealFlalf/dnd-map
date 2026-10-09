@@ -3,7 +3,9 @@
 Интерактивная карта для настольных ролевых игр: Мастер загружает карту и накладывает сетку, участники в реальном времени двигают фишки.
 
 - Требования: [analitika-servis-karta-dnd.md](analitika-servis-karta-dnd.md)
+- Устройство сервиса: [docs/architecture.md](docs/architecture.md)
 - План разработки: [plan-razrabotki.md](plan-razrabotki.md)
+- Развёртывание на сервере: [docs/deploy.md](docs/deploy.md)
 
 ## Структура
 
@@ -41,6 +43,8 @@
 |---|---|
 | `pnpm dev` | Сервер (порт 3000) и клиент (порт 5173) с автоперезагрузкой |
 | `pnpm test` | Тесты (Vitest). Серверные тесты используют отдельную базу `dnd_map_test` (создаётся автоматически; другой адрес — через `TEST_DATABASE_URL`) |
+| `pnpm test:e2e` | Сборка и e2e-сценарии UC-1…UC-4 в браузере (Playwright) против продакшн-сборки; база `dnd_map_e2e` создаётся сама. Вместо встроенного Chromium можно взять установленный браузер: `E2E_BROWSER_CHANNEL=msedge` (иначе один раз `pnpm exec playwright install chromium`) |
+| `pnpm --filter @dnd-map/server load-test` | Нагрузочный тест против запущенного сервера (по умолчанию 20 сессий × 10 участников, 60 с; сервер запускать с `RATE_LIMIT=off`) |
 | `pnpm lint` / `pnpm format` | ESLint / Prettier |
 | `pnpm typecheck` | Проверка типов во всех пакетах |
 | `pnpm build` | Сборка клиента и сервера |

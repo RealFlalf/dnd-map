@@ -100,6 +100,8 @@ model Token {
   owner Participant? @relation(fields: [ownerParticipantId], references: [id], onDelete: Cascade)
 
   @@index([mapId])
+  /// At most one character per player and map. Monsters have no owner, and NULLs never collide.
+  @@unique([mapId, ownerParticipantId])
   @@map("tokens")
 }
 

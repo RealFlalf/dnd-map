@@ -316,6 +316,20 @@ describe('character.place', () => {
     expect(await db.prisma.token.count({ where: { ownerParticipantId: ctx.alice.id } })).toBe(2);
   });
 
+  it('gives exactly one character when the same request arrives twice at once', async () => {
+    const ctx = await setup();
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, (_, i) => place(ctx.alice.socket, ctx.mapId, 100 + i * 70, 100)),
+    );
+
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok).map((r) => (r as Failed).error)).toEqual(
+      Array(4).fill('already_placed'),
+    );
+    expect(await db.prisma.token.count({ where: { ownerParticipantId: ctx.alice.id } })).toBe(1);
+  });
+
   it('can be taken off the map and placed again', async () => {
     const ctx = await setup();
     const token = await placeOk(ctx.alice.socket, ctx.mapId);

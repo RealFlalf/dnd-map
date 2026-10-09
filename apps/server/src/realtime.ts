@@ -99,7 +99,20 @@ export function registerRealtime(
     io.to(sessionId).emit('session.participants', await participantViews(sessionId));
   };
 
+  /**
+   * Who may drag a token and whether players see it, for relaying live drags (~20 messages a second
+   * per dragging client). Reading this from the database every time was the bottleneck under load.
+   * Entries are dropped as soon as the token changes or the session's map changes, and expire
+   * quickly anyway, so a hidden monster is never relayed to players on stale information.
+   */
+  const dragCache = new Map<string, { sessionId: string; token: TokenView; expiresAt: number }>();
+  const DRAG_CACHE_MS = 2000;
+  const forgetSession = (sessionId: string) => {
+    for (const [id, entry] of dragCache) if (entry.sessionId === sessionId) dragCache.delete(id);
+  };
+
   const broadcastState = async (sessionId: string): Promise<void> => {
+    forgetSession(sessionId); // the current map (and with it the draggable tokens) may have changed
     const [forMaster, forPlayers] = await Promise.all([
       maps.getState(sessionId, 'master'),
       maps.getState(sessionId, 'player'),
@@ -168,6 +181,7 @@ export function registerRealtime(
 
   /** Sends every role the patch it may see, to everyone in the session except the sender. */
   const emitPatches = (from: IoSocket | IoServer, sessionId: string, change: TokenChange) => {
+    dragCache.delete(change.token.id);
     for (const role of ['master', 'player'] as const) {
       from.to(roleRoom(sessionId, role)).emit('tokens.changed', patchFor(change, role));
     }
@@ -291,8 +305,20 @@ export function registerRealtime(
     const joined = socket.data.session;
     const parsed = tokenMoveSchema.safeParse(request);
     if (!joined || !parsed.success) return;
-    const token = await tokens.find(joined.sessionId, parsed.data.tokenId);
-    if (!token || !can(actorOf(joined), 'token.move', tokenSubject(token))) return;
+    const { tokenId } = parsed.data;
+    const now = Date.now();
+    let cached = dragCache.get(tokenId);
+    if (!cached || cached.expiresAt < now || cached.sessionId !== joined.sessionId) {
+      const found = await tokens.find(joined.sessionId, tokenId);
+      if (!found) return;
+      cached = { sessionId: joined.sessionId, token: found, expiresAt: now + DRAG_CACHE_MS };
+      dragCache.set(tokenId, cached);
+      if (dragCache.size > 10_000) {
+        for (const [id, entry] of dragCache) if (entry.expiresAt < now) dragCache.delete(id);
+      }
+    }
+    const token = cached.token;
+    if (!can(actorOf(joined), 'token.move', tokenSubject(token))) return;
 
     const room = token.visible ? joined.sessionId : roleRoom(joined.sessionId, 'master');
     socket.to(room).emit('token.dragging', parsed.data);
