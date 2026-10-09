@@ -11,6 +11,7 @@ import { createMapService } from './maps/service';
 import { createLocalStorage } from './maps/storage';
 import { runCleanup } from './maintenance/cleanup';
 import { createHttpLimiter, type HttpRuleName } from './rate-limit';
+import { createLineStore } from './lines/store';
 import { registerRealtime, type IoServer } from './realtime';
 import { registerSessionRoutes } from './sessions/routes';
 import { createSessionService } from './sessions/service';
@@ -114,6 +115,7 @@ export async function buildApp({ config, db }: AppDeps) {
     characters,
     obstacles,
     vision,
+    lines: createLineStore(config.LINE_TTL_SECONDS * 1000),
     rateLimit,
     log: app.log,
   });

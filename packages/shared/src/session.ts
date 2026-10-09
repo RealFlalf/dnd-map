@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { LineView } from './line';
 import type { SessionState } from './map';
 
 export type Role = 'master' | 'player';
@@ -66,6 +67,8 @@ export type JoinResult =
       self: ParticipantView;
       participants: ParticipantView[];
       state: SessionState;
+      /** Temporary lines still alive on the current map. */
+      lines: LineView[];
       /** Present only when a new participant was created; must be stored by the client. */
       participantKey?: string;
     }

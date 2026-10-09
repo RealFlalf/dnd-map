@@ -48,6 +48,8 @@ export default defineConfig({
       // All test browsers share one address; the limits are covered by the server tests.
       RATE_LIMIT: 'off',
       CLEANUP_INTERVAL_MINUTES: '0',
+      // Long enough to see a line arrive, short enough to watch it go.
+      LINE_TTL_SECONDS: '6',
     },
   },
 });

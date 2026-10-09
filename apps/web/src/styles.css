@@ -245,6 +245,12 @@ button:disabled {
   border-color: var(--border);
 }
 
+.zoom-controls button.active {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
 .sidebar {
   width: 18rem;
   padding: 1rem;

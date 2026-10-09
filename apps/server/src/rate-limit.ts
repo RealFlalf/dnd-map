@@ -63,6 +63,8 @@ export class RateLimiter {
 export const SOCKET_RULES: Readonly<Record<string, Rule>> = {
   'token.drag': { capacity: 40, perSecond: 30 },
   'grid.update': { capacity: 20, perSecond: 20 },
+  // A stroke is one message; a few quick ones in a row are fine, a stream of them is not.
+  'line.draw': { capacity: 6, perSecond: 2 },
   'session.join': { capacity: 5, perSecond: 0.5 },
   'state.sync': { capacity: 5, perSecond: 1 },
   'system.ping': { capacity: 5, perSecond: 2 },

@@ -6,6 +6,7 @@ import type {
   MapRef,
   SessionState,
 } from './map';
+import type { LineDraw, LineResult, LineView } from './line';
 import type { FogUpdate } from './vision';
 import type {
   ObstacleAdd,
@@ -36,7 +37,7 @@ import type { JoinRequest, JoinResult, ParticipantView } from './session';
  * Socket.IO contract shared by the server and the web client.
  * Bump PROTOCOL_VERSION on any breaking change to these events.
  */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 export interface HelloPayload {
   protocolVersion: number;
@@ -60,6 +61,8 @@ export interface ServerToClientEvents {
   'obstacles.changed': (patch: ObstaclesPatch) => void;
   /** Live position of a token someone is dragging right now. Not versioned, never stored. */
   'token.dragging': (drag: TokenDragging) => void;
+  /** Someone drew a temporary line. Not versioned, never stored; it goes away after `ttlMs`. */
+  'line.drawn': (line: LineView) => void;
 }
 
 export interface ClientToServerEvents {
@@ -100,6 +103,8 @@ export interface ClientToServerEvents {
   'obstacle.move': (request: ObstacleMove, ack: (res: ObstacleResult) => void) => void;
   /** Master only: removes every obstacle of the map. */
   'obstacle.clear': (request: ObstacleClear, ack: (res: ObstacleRemoveResult) => void) => void;
+  /** Anyone: a temporary line over the current map. The others receive `line.drawn`. */
+  'line.draw': (request: LineDraw, ack: (res: LineResult) => void) => void;
   /** Intermediate position while dragging; fire and forget, send at most ~20 times per second. */
   'token.drag': (request: TokenMove) => void;
 }

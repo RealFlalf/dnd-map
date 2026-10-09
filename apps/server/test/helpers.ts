@@ -27,6 +27,7 @@ export const testConfig: Config = {
   RATE_LIMIT: 'off',
   SESSION_TTL_DAYS: 30,
   CLEANUP_INTERVAL_MINUTES: 0,
+  LINE_TTL_SECONDS: 30,
   TRUST_PROXY: 'false',
   CORS_ORIGIN: 'http://localhost:5173',
 };

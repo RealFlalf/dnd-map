@@ -26,6 +26,7 @@ const matrix: Array<[string, Action, TokenSubject | undefined, boolean, boolean]
   ["delete someone else's character", 'token.delete', otherCharacter, true, false],
   ['hide a character', 'token.setVisibility', ownCharacter, false, false],
   ['choose a character icon', 'character.setIcon', undefined, false, true],
+  ['draw a temporary line', 'line.draw', undefined, true, true],
 ];
 
 describe('can()', () => {

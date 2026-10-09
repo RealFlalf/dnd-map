@@ -11,6 +11,7 @@ import {
   type GridUpdate,
   type JoinError,
   type JoinRequest,
+  type LineView,
   type ObstacleKind,
   type ObstaclesPatch,
   type ObstacleView,
@@ -22,6 +23,7 @@ import {
   type TokenView,
 } from '@dnd-map/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLines } from './useLines';
 import { findSession, uploadIcon, uploadMap } from '../api';
 import { socket } from '../socket';
 import { forgetParticipantKey, getParticipantKey, saveParticipantKey } from '../storage';
@@ -183,6 +185,8 @@ export function useSession(rawInviteCode: string) {
   const [characterNotice, setCharacterNotice] = useState<{ text: string; nonce: number } | null>(
     null,
   );
+  /** Temporary lines the server still had when we (re)joined. */
+  const [lineSeed, setLineSeed] = useState<{ lines: LineView[]; nonce: number } | null>(null);
   const dragTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const lastDragSent = useRef(0);
 
@@ -237,6 +241,7 @@ export function useSession(rawInviteCode: string) {
       selfRole.current = result.self.role;
       worldRef.current = result.state;
       forgetRemoteDrags();
+      setLineSeed({ lines: result.lines, nonce: Date.now() });
       setState({
         status: 'joined',
         inviteCode: result.inviteCode,
@@ -768,8 +773,15 @@ export function useSession(rawInviteCode: string) {
     [],
   );
 
+  const { lines, draw: drawLine } = useLines(
+    lineSeed,
+    state.status === 'joined' ? state.self : null,
+  );
+
   return {
     state,
+    lines,
+    drawLine,
     outdated,
     joinAsPlayer,
     mapActions,

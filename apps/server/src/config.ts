@@ -16,6 +16,8 @@ const envSchema = z.object({
   CLEANUP_INTERVAL_MINUTES: z.coerce.number().min(0).default(60),
   /** Set to 'true' behind a reverse proxy so limits use the real client address. */
   TRUST_PROXY: z.enum(['true', 'false']).default('false'),
+  /** How long a temporary line drawn over the map lives. */
+  LINE_TTL_SECONDS: z.coerce.number().positive().max(3600).default(30),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
 });
 

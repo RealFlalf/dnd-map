@@ -1,4 +1,5 @@
 export * from './events';
+export * from './line';
 export * from './map';
 export * from './obstacle';
 export * from './permissions';

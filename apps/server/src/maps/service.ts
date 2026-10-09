@@ -90,6 +90,17 @@ export function createMapService(prisma: PrismaClient, storage: FileStorage) {
       );
     },
 
+    /** The session's current map and its size, or null when no map is chosen yet. */
+    async currentMap(
+      sessionId: string,
+    ): Promise<{ id: string; width: number; height: number } | null> {
+      const session = await prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { currentMap: { select: { id: true, width: true, height: true } } },
+      });
+      return session?.currentMap ?? null;
+    },
+
     /** Fog of war of the current map: on or off, and how far the party sees. Returns the new version. */
     async updateFog(
       sessionId: string,

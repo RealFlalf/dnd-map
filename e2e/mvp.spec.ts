@@ -281,6 +281,30 @@ test('on a phone a player can place and move their character with a finger', asy
     await touch('touchMove', [[x + ((tx - x) * i) / 10, y + ((ty - y) * i) / 10]]);
   await touch('touchEnd', []);
   await expect(tokensOn(master)).toHaveText(['Сэм, клетка 9, 6']);
+
+  // With the pen a finger draws a line, starting right on the character, which stays put.
+  const lines = master.getByRole('list', { name: 'Линии на карте' }).getByRole('listitem');
+  await phone.getByRole('button', { name: 'Рисовать линии' }).tap();
+  await touch('touchStart', [[tx, ty]]);
+  for (let i = 1; i <= 10; i++) await touch('touchMove', [[tx - i * 15, ty - i * 10]]);
+  await touch('touchEnd', []);
+  await expect(lines).toHaveText(['Линия: Сэм']);
+  await expect(tokensOn(master)).toHaveText(['Сэм, клетка 9, 6']);
+
+  // ...but a pinch is a pinch, not a line.
+  await touch('touchStart', [[x, y]]);
+  await touch('touchStart', [
+    [x, y],
+    [x + 80, y],
+  ]);
+  for (let i = 1; i <= 5; i++)
+    await touch('touchMove', [
+      [x - i * 10, y],
+      [x + 80 + i * 10, y],
+    ]);
+  await touch('touchEnd', []);
+  await phone.waitForTimeout(500);
+  await expect(lines).toHaveCount(1);
 });
 
 test('obstacles: the master builds walls, players cannot cross them, the master takes them down', async ({
@@ -478,4 +502,42 @@ test('obstacles: the master drags them cell by cell, and they follow the grid wh
   await cellSize.fill('300');
   await cellSize.press('Enter');
   await expect(obstaclesOn(alice)).toHaveCount(0);
+});
+
+test('temporary lines: master and players draw, everybody sees them, and they fade away', async ({
+  page: master,
+  browser,
+}) => {
+  const inviteUrl = await createSessionAsMaster(master);
+  await uploadMap(master, 'dungeon.png');
+  const alice = await joinAsPlayer(browser, inviteUrl, 'Алиса');
+  await waitForMap(alice);
+  await placeMonster(master, 'Гоблин', cell(3, 3));
+  const linesOn = (page: Page) =>
+    page.getByRole('list', { name: 'Линии на карте' }).getByRole('listitem');
+
+  // With the pen a drag draws, even when it starts on a token: nothing moves, nothing pans.
+  const pen = master.getByRole('button', { name: 'Рисовать линии' });
+  await pen.click();
+  await expect(pen).toHaveAttribute('aria-pressed', 'true');
+  await dragOnMap(master, cell(3, 3), cell(7, 5));
+  await expect(linesOn(master)).toHaveText(['Линия: Мастер']);
+  await expect(linesOn(alice)).toHaveText(['Линия: Мастер']);
+  await expect(tokensOn(master)).toHaveText(['Гоблин 1, клетка 3, 3']);
+
+  // A player draws too.
+  await alice.getByRole('button', { name: 'Рисовать линии' }).click();
+  await dragOnMap(alice, cell(8, 2), cell(10, 6));
+  await expect(linesOn(master)).toHaveText(['Линия: Мастер', 'Линия: Алиса']);
+
+  // Someone who comes back in the meantime still sees them.
+  await alice.reload();
+  await waitForMap(alice);
+  await expect(linesOn(alice)).toHaveCount(2);
+
+  // Esc puts the pen away; the lines go by themselves (6 s in the e2e server, 30 s for real).
+  await master.keyboard.press('Escape');
+  await expect(pen).toHaveAttribute('aria-pressed', 'false');
+  await expect(linesOn(master)).toHaveCount(0, { timeout: 10_000 });
+  await expect(linesOn(alice)).toHaveCount(0, { timeout: 10_000 });
 });

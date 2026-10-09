@@ -4,7 +4,9 @@ import {
   describeCells,
   displayNameSchema,
   inAnyPolygon,
+  lineColor,
   OBSTACLE_KINDS,
+  type ActionResult,
   type ObstacleKind,
   type Point,
   type JoinError,
@@ -33,6 +35,7 @@ import {
   type SessionState,
   type TokenActions,
 } from '../session/useSession';
+import type { LiveLine } from '../session/useLines';
 import { getDisplayName, saveDisplayName } from '../storage';
 
 const errorText: Record<JoinError | 'network', string> = {
@@ -59,6 +62,8 @@ export function SessionPage() {
     obstacleActions,
     fogActions,
     actionNotice,
+    lines,
+    drawLine,
   } = useSession(inviteCode);
 
   switch (state.status) {
@@ -106,6 +111,8 @@ export function SessionPage() {
           obstacleActions={obstacleActions}
           fogActions={fogActions}
           actionNotice={actionNotice}
+          lines={lines}
+          drawLine={drawLine}
         />
       );
   }
@@ -124,6 +131,7 @@ const placeErrors: Record<string, string> = {
   blocked: 'Здесь препятствие: поставить нельзя.',
   too_many_obstacles: 'На карте уже максимум препятствий.',
   invalid_request: 'Сюда поставить нельзя.',
+  too_many_lines: 'У вас уже много линий на карте — подождите, пока старые исчезнут.',
 };
 
 function JoinedView({
@@ -137,7 +145,11 @@ function JoinedView({
   obstacleActions,
   fogActions,
   actionNotice,
+  lines,
+  drawLine,
 }: {
+  lines: LiveLine[];
+  drawLine(mapId: string, points: number[]): Promise<ActionResult>;
   obstacleActions: ObstacleActions;
   fogActions: FogActions;
   actionNotice: { text: string; nonce: number } | null;
@@ -157,6 +169,7 @@ function JoinedView({
   const [focus, setFocus] = useState<{ x: number; y: number; nonce: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [previewFog, setPreviewFog] = useState(false);
+  const [pen, setPen] = useState(false);
   const { world, self } = state;
   const offline = !state.connected;
   const isMaster = self.role === 'master';
@@ -251,8 +264,20 @@ function JoinedView({
   // starts placing or calibrating so that the whole map can be tapped.
   const [sheetOpen, setSheetOpen] = useState(() => !currentMap || (!isMaster && !myCharacter));
   useEffect(() => {
-    if (placing || calibrating || tool) setSheetOpen(false);
+    if (placing || calibrating || tool || pen) setSheetOpen(false);
+  }, [placing, calibrating, tool, pen]);
+  // The pen and the other modes take turns: whichever was switched on last wins.
+  useEffect(() => {
+    if (placing || calibrating || tool) setPen(false);
   }, [placing, calibrating, tool]);
+  const togglePen = useCallback((on: boolean) => {
+    setPen(on);
+    if (on) {
+      setPlacing(null);
+      setCalibrating(false);
+      setTool(null);
+    }
+  }, []);
   // Starting to place something ends obstacle editing.
   useEffect(() => {
     if (placing) setTool(null);
@@ -268,6 +293,7 @@ function JoinedView({
       setPlacing(null);
       setCalibrating(false);
       setTool(null);
+      setPen(false);
     }
   }, [offline]);
 
@@ -297,6 +323,7 @@ function JoinedView({
         setSelectedId(null);
         setTool(null);
         setSelectedObstacleId(null);
+        setPen(false);
       } else if (
         (e.key === 'Delete' || e.key === 'Backspace') &&
         !typing &&
@@ -349,6 +376,17 @@ function JoinedView({
                 setCalibrating(false);
               }}
               fog={fogProp}
+              lines={{
+                list: lines,
+                pen: pen && !offline,
+                onPenChange: togglePen,
+                color: lineColor({ authorId: self.id, byMaster: isMaster }),
+                onDraw: (points) =>
+                  void drawLine(currentMap.id, points).then((res) => {
+                    if (!res.ok)
+                      setNotice(placeErrors[res.error] ?? 'Не удалось нарисовать линию.');
+                  }),
+              }}
               obstacles={{
                 list: shown.obstacles,
                 selectedId: selectedObstacle?.id ?? null,
@@ -384,6 +422,17 @@ function JoinedView({
                   {o.blocksSight ? '' : ' (не закрывает обзор)'}
                 </li>
               ))}
+            </ul>
+          ) : null}
+          {currentMap ? (
+            <ul className="sr-only" aria-label="Линии на карте">
+              {lines
+                .filter((l) => l.mapId === currentMap.id)
+                .map((l) => (
+                  <li key={l.id}>
+                    Линия: {state.participants.find((p) => p.id === l.authorId)?.displayName ?? '—'}
+                  </li>
+                ))}
             </ul>
           ) : null}
           {currentMap ? (

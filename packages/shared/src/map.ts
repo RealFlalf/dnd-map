@@ -93,6 +93,8 @@ export type ActionError =
   | 'participant_not_found'
   | 'obstacle_not_found'
   | 'too_many_obstacles'
+  /** The participant already has as many lines on the map as allowed; wait for some to fade. */
+  | 'too_many_lines'
   /** The move would end in an obstacle or cross one. */
   | 'blocked'
   /** Too many requests from this connection; slow down. */

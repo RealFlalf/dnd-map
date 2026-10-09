@@ -1,5 +1,7 @@
 import {
   can,
+  clampLine,
+  lineDrawSchema,
   characterIconSchema,
   characterPlaceSchema,
   defaultCharacterIcon,
@@ -30,6 +32,7 @@ import type {
   JoinRequest,
   FogState,
   JoinResult,
+  LineResult,
   ObstacleRemoveResult,
   ObstacleResult,
   ParticipantView,
@@ -44,6 +47,7 @@ import type { Participant } from '@prisma/client';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Server, Socket } from 'socket.io';
 import type { CharacterService } from './characters/service';
+import type { LineStore } from './lines/store';
 import type { MapService } from './maps/service';
 import type { ObstacleOutcome, ObstacleService } from './obstacles/service';
 import type { SessionService } from './sessions/service';
@@ -71,6 +75,8 @@ interface RealtimeDeps {
   characters: CharacterService;
   obstacles: ObstacleService;
   vision: VisionService;
+  /** Temporary lines, kept in memory only. */
+  lines: LineStore;
   /** Drop events from connections that send too many (see rate-limit.ts). */
   rateLimit: boolean;
   log: FastifyBaseLogger;
@@ -89,7 +95,7 @@ export interface Realtime {
 
 export function registerRealtime(
   io: IoServer,
-  { sessions, maps, tokens, characters, obstacles, vision, rateLimit, log }: RealtimeDeps,
+  { sessions, maps, tokens, characters, obstacles, vision, lines, rateLimit, log }: RealtimeDeps,
 ): Realtime {
   const inFlight = new Set<Promise<void>>();
   const track = (work: Promise<void>): void => {
@@ -461,6 +467,28 @@ export function registerRealtime(
       : { ok: true, version: patch.version };
   };
 
+  /** Anyone may sketch over the current map; the line is not stored and goes away by itself. */
+  const drawLine = async (socket: IoSocket, request: unknown): Promise<LineResult> => {
+    const joined = socket.data.session;
+    if (!joined) return { ok: false, error: 'not_joined' };
+    if (!can(actorOf(joined), 'line.draw')) return { ok: false, error: 'forbidden' };
+    const parsed = lineDrawSchema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'invalid_request' };
+
+    // Only over the map everybody is looking at, and only inside the picture.
+    const map = await maps.currentMap(joined.sessionId);
+    if (!map || map.id !== parsed.data.mapId) return { ok: false, error: 'map_not_found' };
+    const line = lines.add(joined.sessionId, {
+      mapId: map.id,
+      authorId: joined.participantId,
+      byMaster: joined.role === 'master',
+      points: clampLine(parsed.data.points, map),
+    });
+    if (!line) return { ok: false, error: 'too_many_lines' };
+    socket.to(joined.sessionId).emit('line.drawn', line);
+    return { ok: true, line };
+  };
+
   const join = async (socket: IoSocket, request: JoinRequest): Promise<JoinResult> => {
     const parsed = joinRequestSchema.safeParse(request);
     if (!parsed.success) return { ok: false, error: 'invalid_request' };
@@ -506,12 +534,14 @@ export function registerRealtime(
     const participants = await participantViews(session.id);
     socket.to(session.id).emit('session.participants', participants);
 
+    const state = await maps.getState(session.id, participant.role);
     return {
       ok: true,
       inviteCode: session.inviteCode,
       self: toView(participant, true),
       participants,
-      state: await maps.getState(session.id, participant.role),
+      state,
+      lines: state.currentMapId ? lines.active(session.id, state.currentMapId) : [],
       ...(participantKey && { participantKey }),
     };
   };
@@ -622,6 +652,12 @@ export function registerRealtime(
           ),
         { ok: false, error: 'internal' } as const,
       ),
+    );
+    socket.on('line.draw', (request, ack) =>
+      acked('line.draw', ack, () => drawLine(socket, request), {
+        ok: false,
+        error: 'internal',
+      } as const),
     );
     socket.on('obstacle.setSight', (request, ack) =>
       acked(

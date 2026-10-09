@@ -6,13 +6,16 @@ import {
   type FogState,
   type ObstacleKind,
   type ObstacleView,
+  thinLine,
   type TokenView,
 } from '@dnd-map/shared';
 import type Konva from 'konva';
-import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { Image as KonvaImage, Layer, Rect, Shape, Stage } from 'react-konva';
+import type { LiveLine } from '../session/useLines';
 import { isPlayerPlacement, type Placing, type RemoteDrags } from '../session/useSession';
 import { FogLayer } from './FogLayer';
+import { LineLayer } from './LineLayer';
 import { ObstacleLayer } from './ObstacleLayer';
 import { TOOL_HINTS, type ObstacleTool } from './obstacleTools';
 import { PALETTE_MIME, parsePlacement } from './placement';
@@ -69,8 +72,21 @@ export interface FogProps {
   opacity: number;
 }
 
+export interface LinesProps {
+  /** Temporary lines of every map; only the current map's are drawn. */
+  list: LiveLine[];
+  /** While on, a drag draws a line instead of panning or moving anything. */
+  pen: boolean;
+  onPenChange(on: boolean): void;
+  /** Colour of this viewer's own lines. */
+  color: string;
+  /** A finished stroke, in map pixels, already thinned out. */
+  onDraw(points: number[]): void;
+}
+
 interface Props {
   map: MapView;
+  lines: LinesProps;
   fog: FogProps | null;
   obstacles: ObstaclesProps;
   tokens: TokensProps;
@@ -97,6 +113,7 @@ const prefersPreview = () => window.matchMedia('(pointer: coarse)').matches;
 export function MapCanvas({
   map,
   fog,
+  lines,
   obstacles,
   calibrating,
   onCalibrated,
@@ -107,11 +124,21 @@ export function MapCanvas({
 }: Props) {
   const [container, size, containerNode] = useElementSize<HTMLDivElement>();
   const stageRef = useRef<Konva.Stage>(null);
-  const wallTool = obstacles.tool === 'wall';
+  const pen = lines.pen && !calibrating;
+  const wallTool = obstacles.tool === 'wall' && !pen;
   const [drawing, setDrawing] = useState<{ from: Point; to: Point } | null>(null);
-  // While calibrating or drawing a wall a drag draws; it must not pan the map.
-  const panLockedRef = useRef(calibrating || wallTool);
-  panLockedRef.current = calibrating || wallTool;
+  /** The line being drawn with the pen, flat x, y in map pixels. */
+  const [stroke, setStroke] = useState<number[] | null>(null);
+  // While calibrating or drawing a wall or a line a drag draws; it must not pan the map.
+  const panLocked = calibrating || wallTool || pen;
+  /** From the second finger until the last one is up: a pinch, never a line. */
+  const pinching = useRef(false);
+  const panLockedRef = useRef(panLocked);
+  panLockedRef.current = panLocked;
+  const mapLines = useMemo(
+    () => lines.list.filter((l) => l.mapId === map.id),
+    [lines.list, map.id],
+  );
   const [view, setView] = useState<View>({ x: 0, y: 0, scale: 1 });
   const [selection, setSelection] = useState<{ from: Point; to: Point } | null>(null);
   const sizeRef = useRef(size);
@@ -180,6 +207,7 @@ export function MapCanvas({
     const p = imagePoint(e);
     if (!p) return;
     if (calibrating) setSelection({ from: p, to: p });
+    else if (pen) setStroke(pinching.current ? null : [p.x, p.y]);
     else if (wallTool) setDrawing({ from: p, to: p });
   };
 
@@ -187,10 +215,20 @@ export function MapCanvas({
     const p = imagePoint(e);
     if (!p) return;
     if (calibrating) setSelection((s) => (s ? { ...s, to: p } : s));
+    else if (pen) setStroke((s) => (s && !pinching.current ? [...s, p.x, p.y] : null));
     else if (wallTool) setDrawing((d) => (d ? { ...d, to: p } : d));
   };
 
+  /** Two screen pixels between kept points: smooth enough, and far fewer of them. */
+  const finishStroke = () => {
+    if (!stroke) return;
+    setStroke(null);
+    const points = thinLine(stroke, 2 / view.scale);
+    if (points.length >= 4) lines.onDraw(points);
+  };
+
   const onPointerUp = () => {
+    if (pen) return finishStroke();
     if (wallTool && drawing) {
       obstacles.onDraw('wall', drawing.from, drawing.to);
       setDrawing(null);
@@ -209,8 +247,8 @@ export function MapCanvas({
   };
 
   const onStageClick = (e: Konva.KonvaEventObject<PointerEvent>) => {
-    // Clicks on a token are handled by the token itself.
-    if (calibrating || e.target !== e.target.getStage()) return;
+    // Clicks on a token are handled by the token itself; with the pen a click is just a short line.
+    if (calibrating || pen || e.target !== e.target.getStage()) return;
     const p = imagePoint(e);
     const tool = obstacles.tool;
     if ((tool === 'pillar' || tool === 'barrel') && p) obstacles.onDraw(tool, p, p);
@@ -266,6 +304,10 @@ export function MapCanvas({
       // Capture phase: runs before Konva sees the event. Pinching must never also drag the stage.
       const stage = stageRef.current;
       if (stage?.isDragging()) stage.stopDrag();
+      // The first finger started a line, but this is a pinch. Konva hears this touch only after us,
+      // so the flag (not just clearing the stroke) keeps it from starting another one.
+      pinching.current = true;
+      setStroke(null);
       stage?.draggable(false);
       last = measure(e);
     };
@@ -293,7 +335,11 @@ export function MapCanvas({
       if (e.touches.length < 2) last = null;
       // Dragging comes back only when every finger is up, so the remaining finger of a pinch
       // does not suddenly start panning.
-      if (e.touches.length === 0) stageRef.current?.draggable(!panLockedRef.current);
+      if (e.touches.length === 0) {
+        stageRef.current?.draggable(!panLockedRef.current);
+        // Konva's own touchend comes after this one: let it find no stroke, then allow new ones.
+        setTimeout(() => (pinching.current = false));
+      }
     };
 
     node.addEventListener('touchstart', onStart, { capture: true, passive: true });
@@ -320,7 +366,7 @@ export function MapCanvas({
         'map-canvas',
         calibrating && 'calibrating',
         placing && 'placing',
-        obstacles.tool && 'drawing',
+        (obstacles.tool || pen) && 'drawing',
       ]
         .filter(Boolean)
         .join(' ')}
@@ -338,7 +384,7 @@ export function MapCanvas({
           y={view.y}
           scaleX={view.scale}
           scaleY={view.scale}
-          draggable={!calibrating && !wallTool}
+          draggable={!panLocked}
           onWheel={onWheel}
           onMouseDown={onPointerDown}
           onTouchStart={onPointerDown}
@@ -346,6 +392,7 @@ export function MapCanvas({
           onTouchMove={onPointerMove}
           onMouseUp={onPointerUp}
           onTouchEnd={onPointerUp}
+          onMouseLeave={() => pen && finishStroke()}
           // One pointer event for mouse and touch: a tap also produces a compatibility click,
           // and listening to both placed every token twice on phones.
           onPointerClick={onStageClick}
@@ -381,8 +428,10 @@ export function MapCanvas({
           <ObstacleLayer
             obstacles={obstacles.list}
             selectedId={obstacles.selectedId}
-            interactive={!calibrating && (obstacles.tool === null || obstacles.tool === 'erase')}
-            movable={!calibrating && obstacles.tool === null && !placing}
+            interactive={
+              !calibrating && !pen && (obstacles.tool === null || obstacles.tool === 'erase')
+            }
+            movable={!calibrating && !pen && obstacles.tool === null && !placing}
             cell={map.grid.scale}
             onPick={obstacles.onPick}
             onMove={obstacles.onMove}
@@ -395,7 +444,7 @@ export function MapCanvas({
             selectedId={tokens.selectedId}
             canMove={tokens.canMove}
             remoteDrags={tokens.remoteDrags}
-            interactive={!calibrating}
+            interactive={!calibrating && !pen}
             onSelect={tokens.onSelect}
             onDrag={tokens.onDrag}
             onMove={tokens.onMove}
@@ -403,6 +452,7 @@ export function MapCanvas({
           {fog && fog.opacity > 0 && (
             <FogLayer fog={fog.state} width={map.width} height={map.height} opacity={fog.opacity} />
           )}
+          <LineLayer lines={mapLines} stroke={stroke && { points: stroke, color: lines.color }} />
           {drawing && wallTool && <WallPreview map={map} from={drawing.from} to={drawing.to} />}
           {selection && (
             <Layer listening={false}>
@@ -427,7 +477,13 @@ export function MapCanvas({
         <div className="map-status error">Не удалось загрузить изображение карты.</div>
       )}
 
-      {obstacles.tool && !placing && <div className="map-hint">{TOOL_HINTS[obstacles.tool]}</div>}
+      {pen ? (
+        <div className="map-hint">
+          Рисуйте мышью или пальцем — линию увидят все, через 30 секунд она исчезнет · Esc — выход
+        </div>
+      ) : (
+        obstacles.tool && !placing && <div className="map-hint">{TOOL_HINTS[obstacles.tool]}</div>
+      )}
       {placing && (
         <div className="map-hint">
           {placing === 'character'
@@ -439,6 +495,16 @@ export function MapCanvas({
       )}
 
       <div className="zoom-controls">
+        <button
+          type="button"
+          className={pen ? 'active' : undefined}
+          aria-label="Рисовать линии"
+          aria-pressed={pen}
+          title="Временные линии: видны всем 30 секунд"
+          onClick={() => lines.onPenChange(!lines.pen)}
+        >
+          ✎
+        </button>
         <button type="button" aria-label="Приблизить" onClick={() => zoomFromCenter(1.25)}>
           +
         </button>

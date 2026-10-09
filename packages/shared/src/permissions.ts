@@ -11,7 +11,8 @@ export type Action =
   | 'token.setVisibility'
   | 'character.setIcon'
   | 'obstacle.edit'
-  | 'fog.update';
+  | 'fog.update'
+  | 'line.draw';
 
 export interface Actor {
   participantId: string;
@@ -35,6 +36,10 @@ export function can(actor: Actor, action: Action, token?: TokenSubject): boolean
     case 'obstacle.edit':
     case 'fog.update':
       return actor.role === 'master';
+
+    case 'line.draw':
+      // Anyone at the table may sketch over the map.
+      return true;
 
     case 'character.setIcon':
       return actor.role === 'player';
