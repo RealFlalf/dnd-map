@@ -59,6 +59,8 @@ export interface ObstaclesProps {
   onPick(obstacleId: string): void;
   /** Master: build `kind` between two points (the server snaps it to cells). */
   onDraw(kind: ObstacleKind, from: Point, to: Point): void;
+  /** Master: shift the obstacle by whole cells. */
+  onMove(obstacleId: string, dCol: number, dRow: number): void;
 }
 
 export interface FogProps {
@@ -380,7 +382,10 @@ export function MapCanvas({
             obstacles={obstacles.list}
             selectedId={obstacles.selectedId}
             interactive={!calibrating && (obstacles.tool === null || obstacles.tool === 'erase')}
+            movable={!calibrating && obstacles.tool === null && !placing}
+            cell={map.grid.scale}
             onPick={obstacles.onPick}
+            onMove={obstacles.onMove}
           />
           <TokenLayer
             obstacles={obstacles.list}

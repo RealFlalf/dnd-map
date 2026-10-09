@@ -1,13 +1,18 @@
 import type { ObstacleView } from '@dnd-map/shared';
 import { memo } from 'react';
-import { Circle, Layer, Rect } from 'react-konva';
+import { Circle, Group, Layer, Rect } from 'react-konva';
 
 interface Props {
   obstacles: ObstacleView[];
   selectedId: string | null;
   /** The master can pick obstacles (to select or erase them); for everyone else they are scenery. */
   interactive: boolean;
+  /** Master: the selected obstacle can be dragged, one cell at a time. */
+  movable: boolean;
+  /** Size of a grid cell, in map pixels. */
+  cell: number;
   onPick(obstacleId: string): void;
+  onMove(obstacleId: string, dCol: number, dRow: number): void;
 }
 
 const WALL = '#4a4540';
@@ -22,12 +27,23 @@ export const ObstacleLayer = memo(function ObstacleLayer({
   obstacles,
   selectedId,
   interactive,
+  movable,
+  cell,
   onPick,
+  onMove,
 }: Props) {
   return (
     <Layer listening={interactive}>
       {obstacles.map((o) => (
-        <ObstacleShape key={o.id} o={o} selected={o.id === selectedId} onPick={onPick} />
+        <ObstacleShape
+          key={o.id}
+          o={o}
+          selected={o.id === selectedId}
+          movable={movable && o.id === selectedId}
+          cell={cell}
+          onPick={onPick}
+          onMove={onMove}
+        />
       ))}
     </Layer>
   );
@@ -36,11 +52,17 @@ export const ObstacleLayer = memo(function ObstacleLayer({
 function ObstacleShape({
   o,
   selected,
+  movable,
+  cell,
   onPick,
+  onMove,
 }: {
   o: ObstacleView;
   selected: boolean;
+  movable: boolean;
+  cell: number;
   onPick(obstacleId: string): void;
+  onMove(obstacleId: string, dCol: number, dRow: number): void;
 }) {
   const cx = o.x + o.width / 2;
   const cy = o.y + o.height / 2;
@@ -50,7 +72,23 @@ function ObstacleShape({
   const pick = { onPointerClick: () => onPick(o.id) };
 
   return (
-    <>
+    <Group
+      draggable={movable}
+      // It travels cell by cell: the shapes inside are drawn where the obstacle is now.
+      onDragMove={(e) => {
+        e.target.position({
+          x: Math.round(e.target.x() / cell) * cell,
+          y: Math.round(e.target.y() / cell) * cell,
+        });
+      }}
+      onDragEnd={(e) => {
+        e.cancelBubble = true; // the stage must not take it for a pan
+        const dCol = Math.round(e.target.x() / cell);
+        const dRow = Math.round(e.target.y() / cell);
+        e.target.position({ x: 0, y: 0 }); // the new place comes back from the state
+        if (dCol !== 0 || dRow !== 0) onMove(o.id, dCol, dRow);
+      }}
+    >
       {o.kind === 'wall' && (
         <Rect
           x={o.x}
@@ -119,6 +157,6 @@ function ObstacleShape({
           listening={false}
         />
       )}
-    </>
+    </Group>
   );
 }

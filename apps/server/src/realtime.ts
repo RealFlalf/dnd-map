@@ -10,6 +10,7 @@ import {
   joinRequestSchema,
   obstacleAddSchema,
   obstacleClearSchema,
+  obstacleMoveSchema,
   obstacleRefSchema,
   obstacleSightSchema,
   mapRefSchema,
@@ -176,12 +177,27 @@ export function registerRealtime(
     const result = await maps.updateGrid(joined.sessionId, parsed.data);
     if (!result) return { ok: false, error: 'map_not_found' };
 
-    socket.to(joined.sessionId).emit('grid.changed', {
-      version: result.version,
-      mapId: parsed.data.mapId,
-      grid: result.grid,
-    });
-    return { ok: true, ...result };
+    const { isCurrent, ...effects } = result;
+    // Cell size and offset change what the party sees: the master gets the new area with the
+    // change, players a whole new view (they have no polygons to patch).
+    let fog: FogState | undefined;
+    if (isCurrent) {
+      forgetSession(joined.sessionId);
+      const current = await currentFog(joined.sessionId);
+      if (current.enabled) fog = current;
+    }
+    const change = { ...effects, mapId: parsed.data.mapId, ...(fog && { fog }) };
+    socket.to(roleRoom(joined.sessionId, 'master')).emit('grid.changed', change);
+    if (fog) {
+      io.to(roleRoom(joined.sessionId, 'player')).emit(
+        'state.snapshot',
+        await maps.getState(joined.sessionId, 'player'),
+      );
+    } else {
+      const { fog: _none, ...forPlayers } = change;
+      socket.to(roleRoom(joined.sessionId, 'player')).emit('grid.changed', forPlayers);
+    }
+    return { ok: true, ...effects, ...(fog && { fog }) };
   };
 
   /** Shared by map.select and map.delete: master only, then `run` reports whether the map existed. */
@@ -592,6 +608,17 @@ export function registerRealtime(
         () =>
           editObstacles(socket, request, obstacleRefSchema, (sid, actor, data) =>
             obstacles.remove(sid, actor, data.obstacleId),
+          ),
+        { ok: false, error: 'internal' } as const,
+      ),
+    );
+    socket.on('obstacle.move', (request, ack) =>
+      acked(
+        'obstacle.move',
+        ack,
+        () =>
+          editObstacles(socket, request, obstacleMoveSchema, (sid, actor, data) =>
+            obstacles.move(sid, actor, data.obstacleId, data.dCol, data.dRow),
           ),
         { ok: false, error: 'internal' } as const,
       ),

@@ -22,7 +22,7 @@ interface Props {
   grid: GridSettings;
   obstacles: ObstacleView[];
   selected: ObstacleView | null;
-  actions: Pick<ObstacleActions, 'remove' | 'setSight' | 'clear'>;
+  actions: Pick<ObstacleActions, 'remove' | 'setSight' | 'clear' | 'move'>;
 }
 
 /** Master: build walls, pillars and barrels, remove them, choose what hides what is behind it. */
@@ -67,6 +67,29 @@ export function ObstaclePanel({ tool, onToolChange, grid, obstacles, selected, a
             />
             Закрывает обзор
           </label>
+          <div className="tool-row" role="group" aria-label="Сдвинуть на клетку">
+            {(
+              [
+                ['←', 'влево', -1, 0],
+                ['↑', 'вверх', 0, -1],
+                ['↓', 'вниз', 0, 1],
+                ['→', 'вправо', 1, 0],
+              ] as const
+            ).map(([arrow, label, dCol, dRow]) => (
+              <button
+                key={label}
+                type="button"
+                className="secondary"
+                aria-label={`Сдвинуть ${label}`}
+                onClick={() => actions.move(selected.id, dCol, dRow)}
+              >
+                {arrow}
+              </button>
+            ))}
+          </div>
+          <p className="hint">
+            Выбранное можно перетащить мышью или пальцем — оно ходит по клеткам.
+          </p>
           <button type="button" className="secondary" onClick={() => actions.remove(selected.id)}>
             Удалить
           </button>

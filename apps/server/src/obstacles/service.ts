@@ -2,6 +2,7 @@ import {
   cellsRect,
   MAX_OBSTACLES_PER_MAP,
   OBSTACLE_KINDS,
+  shiftObstacle,
   type ObstacleAdd,
   type ObstacleView,
   type ObstaclesPatch,
@@ -109,6 +110,40 @@ export function createObstacleService(prisma: PrismaClient) {
           obstacleId: row.id,
           blocksSight,
         });
+        const obstacle = toObstacleView(updated);
+        return { ok: true, obstacle, patch: { version, upserted: [obstacle], removedIds: [] } };
+      });
+    },
+
+    /** Shifts the obstacle by whole cells, held back at the edge of the map; no change, no new version. */
+    async move(
+      sessionId: string,
+      actorId: string,
+      obstacleId: string,
+      dCol: number,
+      dRow: number,
+    ): Promise<ObstacleOutcome> {
+      return prisma.$transaction(async (tx) => {
+        const row = await load(tx, sessionId, obstacleId);
+        if (!row) return fail('obstacle_not_found');
+        const map = await tx.map.findUniqueOrThrow({ where: { id: row.mapId } });
+        const moved = shiftObstacle(
+          { width: map.width, height: map.height, grid: gridOf(map) },
+          row,
+          dCol,
+          dRow,
+        );
+        if (!moved) {
+          const { version } = await tx.session.findUniqueOrThrow({
+            where: { id: sessionId },
+            select: { version: true },
+          });
+          const obstacle = toObstacleView(row);
+          return { ok: true, obstacle, patch: { version, upserted: [], removedIds: [] } };
+        }
+        const updated = await tx.obstacle.update({ where: { id: row.id }, data: moved });
+        const { version } = await bumpVersion(tx, sessionId);
+        await logEvent(tx, sessionId, actorId, 'obstacle.move', { obstacleId: row.id, dCol, dRow });
         const obstacle = toObstacleView(updated);
         return { ok: true, obstacle, patch: { version, upserted: [obstacle], removedIds: [] } };
       });

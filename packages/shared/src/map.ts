@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ObstacleView } from './obstacle';
+import type { ObstacleView, ObstaclesDelta } from './obstacle';
 import type { FogState } from './vision';
 import type { TokenView } from './token';
 
@@ -103,9 +103,20 @@ export type ActionError =
 export type ActionResult<T extends object = object> =
   ({ ok: true } & T) | { ok: false; error: ActionError };
 
-export type GridUpdateResult = ActionResult<{ version: number; grid: GridSettings }>;
+/**
+ * What a grid change brings with it. Obstacles stay on their cells, so a new cell size moves and
+ * resizes them; with fog on, the area in sight changes with the cells as well.
+ */
+export interface GridSideEffects {
+  obstacles?: ObstaclesDelta;
+  fog?: FogState;
+}
 
-export interface GridChanged {
+export type GridUpdateResult = ActionResult<
+  { version: number; grid: GridSettings } & GridSideEffects
+>;
+
+export interface GridChanged extends GridSideEffects {
   version: number;
   mapId: string;
   grid: GridSettings;

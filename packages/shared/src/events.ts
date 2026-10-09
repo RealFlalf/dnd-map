@@ -13,6 +13,7 @@ import type {
   ObstacleRef,
   ObstacleRemoveResult,
   ObstacleResult,
+  ObstacleMove,
   ObstacleSight,
   ObstaclesPatch,
 } from './obstacle';
@@ -35,7 +36,7 @@ import type { JoinRequest, JoinResult, ParticipantView } from './session';
  * Socket.IO contract shared by the server and the web client.
  * Bump PROTOCOL_VERSION on any breaking change to these events.
  */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 export interface HelloPayload {
   protocolVersion: number;
@@ -95,6 +96,8 @@ export interface ClientToServerEvents {
   'obstacle.remove': (request: ObstacleRef, ack: (res: ObstacleRemoveResult) => void) => void;
   /** Master only: whether the obstacle blocks the line of sight. */
   'obstacle.setSight': (request: ObstacleSight, ack: (res: ObstacleResult) => void) => void;
+  /** Master only: shifts an obstacle by whole cells (held back at the edge of the map). */
+  'obstacle.move': (request: ObstacleMove, ack: (res: ObstacleResult) => void) => void;
   /** Master only: removes every obstacle of the map. */
   'obstacle.clear': (request: ObstacleClear, ack: (res: ObstacleRemoveResult) => void) => void;
   /** Intermediate position while dragging; fire and forget, send at most ~20 times per second. */

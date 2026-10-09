@@ -4,6 +4,8 @@ import {
   type GridSettings,
   type FogUpdate,
   type GridUpdate,
+  type ObstaclesDelta,
+  remapObstacles,
   type MapView,
   type Role,
   type SessionState,
@@ -194,11 +196,18 @@ export function createMapService(prisma: PrismaClient, storage: FileStorage) {
     async updateGrid(
       sessionId: string,
       { mapId, ...update }: GridUpdate,
-    ): Promise<{ version: number; grid: GridSettings } | null> {
+    ): Promise<{
+      version: number;
+      grid: GridSettings;
+      /** Obstacles follow their cells when the grid changes. */
+      obstacles?: ObstaclesDelta;
+      isCurrent: boolean;
+    } | null> {
       return prisma.$transaction(async (tx) => {
         const map = await tx.map.findFirst({ where: { id: mapId, sessionId } });
         if (!map) return null;
-        const grid = applyGridUpdate(gridOf(map), update);
+        const before = gridOf(map);
+        const grid = applyGridUpdate(before, update);
         await tx.map.update({
           where: { id: mapId },
           data: {
@@ -209,8 +218,33 @@ export function createMapService(prisma: PrismaClient, storage: FileStorage) {
             gridSnap: grid.snap,
           },
         });
+        const moved = remapObstacles(
+          map,
+          before,
+          grid,
+          (await tx.obstacle.findMany({ where: { mapId } })).map(toObstacleView),
+        );
+        for (const o of moved.upserted) {
+          await tx.obstacle.update({
+            where: { id: o.id },
+            data: { x: o.x, y: o.y, width: o.width, height: o.height },
+          });
+        }
+        if (moved.removedIds.length > 0) {
+          await tx.obstacle.deleteMany({ where: { id: { in: moved.removedIds } } });
+        }
         const { version } = await bumpVersion(tx, sessionId);
-        return { version, grid };
+        const session = await tx.session.findUniqueOrThrow({
+          where: { id: sessionId },
+          select: { currentMapId: true },
+        });
+        const changed = moved.upserted.length > 0 || moved.removedIds.length > 0;
+        return {
+          version,
+          grid,
+          isCurrent: session.currentMapId === mapId,
+          ...(changed && { obstacles: moved }),
+        };
       });
     },
   };

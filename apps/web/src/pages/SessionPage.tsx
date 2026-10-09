@@ -356,6 +356,7 @@ function JoinedView({
                 stopsTokens: !isMaster,
                 onPick: pickObstacle,
                 onDraw: (kind, from, to) => void drawObstacle(kind, from, to),
+                onMove: obstacleActions.move,
               }}
               tokens={{
                 list: shown.tokens,

@@ -62,6 +62,20 @@ export type ObstacleRef = z.input<typeof obstacleRefSchema>;
 export const obstacleSightSchema = z.object({ obstacleId: id, blocksSight: z.boolean() });
 export type ObstacleSight = z.input<typeof obstacleSightSchema>;
 
+/** Moves an obstacle by whole cells; the server keeps it on the map. */
+export const obstacleMoveSchema = z.object({
+  obstacleId: id,
+  dCol: z.number().int().min(-1000).max(1000),
+  dRow: z.number().int().min(-1000).max(1000),
+});
+export type ObstacleMove = z.input<typeof obstacleMoveSchema>;
+
+/** Obstacles that changed together with something else (the grid), without a version of their own. */
+export interface ObstaclesDelta {
+  upserted: ObstacleView[];
+  removedIds: string[];
+}
+
 export const obstacleClearSchema = z.object({ mapId: id });
 export type ObstacleClear = z.input<typeof obstacleClearSchema>;
 
@@ -98,6 +112,78 @@ export function cellsRect(
   const bottom = Math.min(map.height, y1);
   if (right <= left || bottom <= top) return null;
   return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+const hundredth = (value: number) => Math.round(value * 100) / 100;
+
+/**
+ * Obstacles live on grid cells: when the grid changes (cell size or offset), each one keeps its
+ * cells and so grows, shrinks or shifts with them. What ends up outside the map is cut off, and
+ * what is entirely outside is dropped. Returns only what changed.
+ */
+export function remapObstacles(
+  map: { width: number; height: number },
+  from: GridSettings,
+  to: GridSettings,
+  list: readonly ObstacleView[],
+): ObstaclesDelta {
+  const delta: ObstaclesDelta = { upserted: [], removedIds: [] };
+  if (from.scale === to.scale && from.offsetX === to.offsetX && from.offsetY === to.offsetY) {
+    return delta;
+  }
+  for (const o of list) {
+    const col = (o.x - from.offsetX) / from.scale;
+    const row = (o.y - from.offsetY) / from.scale;
+    const x0 = to.offsetX + col * to.scale;
+    const y0 = to.offsetY + row * to.scale;
+    const x1 = x0 + (o.width / from.scale) * to.scale;
+    const y1 = y0 + (o.height / from.scale) * to.scale;
+    const left = hundredth(Math.max(0, x0));
+    const top = hundredth(Math.max(0, y0));
+    const right = hundredth(Math.min(map.width, x1));
+    const bottom = hundredth(Math.min(map.height, y1));
+    if (right <= left || bottom <= top) {
+      delta.removedIds.push(o.id);
+      continue;
+    }
+    const next = {
+      x: left,
+      y: top,
+      width: hundredth(right - left),
+      height: hundredth(bottom - top),
+    };
+    if (next.x !== o.x || next.y !== o.y || next.width !== o.width || next.height !== o.height) {
+      delta.upserted.push({ ...o, ...next });
+    }
+  }
+  return delta;
+}
+
+/**
+ * The obstacle shifted by whole cells, held back where it would leave the map. Null if it cannot
+ * move that way at all (so there is nothing to change).
+ */
+export function shiftObstacle(
+  map: { width: number; height: number; grid: GridSettings },
+  r: Rect,
+  dCol: number,
+  dRow: number,
+): Rect | null {
+  const { scale } = map.grid;
+  const clampSteps = (steps: number, start: number, size: number, limit: number) => {
+    const min = Math.ceil((0 - start) / scale - 1e-9);
+    const max = Math.floor((limit - (start + size)) / scale + 1e-9);
+    return min > max ? 0 : Math.max(min, Math.min(max, steps));
+  };
+  const cols = clampSteps(dCol, r.x, r.width, map.width);
+  const rows = clampSteps(dRow, r.y, r.height, map.height);
+  if (cols === 0 && rows === 0) return null;
+  return {
+    x: hundredth(r.x + cols * scale),
+    y: hundredth(r.y + rows * scale),
+    width: r.width,
+    height: r.height,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------

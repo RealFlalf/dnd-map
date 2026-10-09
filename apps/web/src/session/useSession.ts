@@ -6,6 +6,8 @@ import {
   PROTOCOL_VERSION,
   type ActionResult,
   type GridChanged,
+  type GridSideEffects,
+  shiftObstacle,
   type GridUpdate,
   type JoinError,
   type JoinRequest,
@@ -77,6 +79,8 @@ export interface ObstacleActions {
   /** The server snaps the rectangle between the two points to whole cells. */
   add(kind: ObstacleKind, from: Point, to: Point): Promise<ActionResult>;
   remove(obstacleId: string): void;
+  /** Shifts the obstacle by whole cells; shown at once, the server holds it back at the map's edge. */
+  move(obstacleId: string, dCol: number, dRow: number): void;
   setSight(obstacleId: string, blocksSight: boolean): void;
   clear(): Promise<ActionResult>;
 }
@@ -123,6 +127,22 @@ const applyTokensPatch = (tokens: TokenView[], patch: TokensPatch): TokenView[] 
     else next.push(token);
   }
   return next;
+};
+
+/** What the server says the grid change did to the obstacles and (with fog) the area in sight. */
+const withGridEffects = (
+  world: WorldState,
+  mapId: string,
+  effects: GridSideEffects,
+): WorldState => {
+  if (mapId !== world.currentMapId) return world;
+  return {
+    ...world,
+    obstacles: effects.obstacles
+      ? applyObstaclesPatch(world.obstacles, { version: 0, ...effects.obstacles })
+      : world.obstacles,
+    fog: effects.fog ?? world.fog,
+  };
 };
 
 const applyObstaclesPatch = (list: ObstacleView[], patch: ObstaclesPatch): ObstacleView[] => {
@@ -300,7 +320,7 @@ export function useSession(rawInviteCode: string) {
       if (!world || change.version <= world.version) return;
       if (change.version > world.version + 1) return void resync(); // an update was missed
       applyWorld({
-        ...world,
+        ...withGridEffects(world, change.mapId, change),
         version: change.version,
         maps: world.maps.map((m) => (m.id === change.mapId ? { ...m, grid: change.grid } : m)),
       });
@@ -409,7 +429,11 @@ export function useSession(rawInviteCode: string) {
           if (!res.ok) return resync(); // refused: drop the optimistic change
           // Events are ordered per connection, so anything before this ack has been applied already.
           const world = worldRef.current;
-          if (world && res.version > world.version) applyWorld({ ...world, version: res.version });
+          if (!world) return;
+          applyWorld({
+            ...withGridEffects(world, payload.mapId, res),
+            version: Math.max(world.version, res.version),
+          });
         })
         .catch(() => resync());
     };
@@ -647,6 +671,19 @@ export function useSession(rawInviteCode: string) {
           .timeout(5000)
           .emitWithAck('obstacle.remove', { obstacleId })
           .then((res) => (res.ok ? confirm(res.version, (list) => list) : resync()))
+          .catch(() => resync());
+      },
+
+      move(obstacleId, dCol, dRow) {
+        if (!socket.connected) return;
+        const world = worldRef.current;
+        const map = world?.maps.find((m) => m.id === world.currentMapId);
+        if (!map) return;
+        editLocal(obstacleId, (o) => ({ ...o, ...shiftObstacle(map, o, dCol, dRow) }));
+        socket
+          .timeout(5000)
+          .emitWithAck('obstacle.move', { obstacleId, dCol, dRow })
+          .then((res) => (res.ok ? confirm(res.version, upsert(res.obstacle)) : void resync()))
           .catch(() => resync());
       },
 

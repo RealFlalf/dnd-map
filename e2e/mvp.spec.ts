@@ -438,3 +438,44 @@ test('master panels can be folded, and stay folded after a reload', async ({ pag
   await master.getByRole('button', { name: 'Туман войны' }).click();
   await expect(fogToggle).toBeVisible();
 });
+
+test('obstacles: the master drags them cell by cell, and they follow the grid when it is resized', async ({
+  page: master,
+  browser,
+}) => {
+  const inviteUrl = await createSessionAsMaster(master);
+  await uploadMap(master, 'dungeon.png');
+  const alice = await joinAsPlayer(browser, inviteUrl, 'Алиса');
+  await waitForMap(alice);
+
+  await tool(master, 'Стена').click();
+  await dragOnMap(master, cell(4, 3), cell(5, 3));
+  await master.keyboard.press('Escape');
+  await expect(obstaclesOn(alice)).toHaveText(['Стена, клетки 4–5 × 3']);
+
+  // select it, then drag it two cells down: a click picks, only the selected one moves
+  await clickMap(master, cell(4, 3));
+  await dragOnMap(master, cell(4, 3), cell(4, 5));
+  await expect(obstaclesOn(master)).toHaveText(['Стена, клетки 4–5 × 5']);
+  await expect(obstaclesOn(alice)).toHaveText(['Стена, клетки 4–5 × 5']);
+
+  // the arrows do the same without a pointer
+  await master.getByRole('button', { name: 'Сдвинуть вправо' }).click();
+  await expect(obstaclesOn(alice)).toHaveText(['Стена, клетки 5–6 × 5']);
+
+  // a bigger cell: the wall keeps its cells, so it is twice as big now and the player sees that too
+  const cellSize = master
+    .locator('.slider-field', { hasText: 'Размер клетки' })
+    .getByRole('spinbutton');
+  await cellSize.fill('140');
+  await cellSize.press('Enter');
+  await expect(obstaclesOn(master)).toHaveText(['Стена, клетки 5–6 × 5']);
+  await alice.reload();
+  await waitForMap(alice);
+  await expect(obstaclesOn(alice)).toHaveText(['Стена, клетки 5–6 × 5']);
+
+  // and when the cells grow so much that it falls off the map, it goes
+  await cellSize.fill('300');
+  await cellSize.press('Enter');
+  await expect(obstaclesOn(alice)).toHaveCount(0);
+});
